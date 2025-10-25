@@ -1,0 +1,93 @@
+# --- Node / Next.js ---
+node_modules/
+.npmrc
+.next/
+.next/cache/
+out/
+dist/
+build/
+.turbo/
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+coverage/
+.nyc_output/
+
+# Debug logs
+logs/
+*.log
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# Env (no claves en git)
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# --- Monorepo específico ---
+# Frontend (Next.js ya cubierto arriba)
+
+# Server / DB (datos locales, volúmenes)
+server/db/data/
+server/db/**/data/
+server/db/pgdata/
+server/db/**/pgdata/
+
+# Carpeta de datos local para RAG u otros
+data/**
+!data/.keep
+!data/README.md
+
+# Docker
+docker-compose.override.yml
+*.pid
+
+# --- Editores / SO ---
+# VS Code (permitir recomendar extensiones)
+.vscode/*
+!.vscode/extensions.json
+
+# JetBrains / IntelliJ
+.idea/
+*.iml
+.idea_modules/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# Miscelánea
+*.swp
+*.swo
+*.orig
+*.rej
+*.patch
+*.bak
+
+# Vercel (ID de proyecto local)
+.vercel/
+
+# Raíz
+/Caddyfile
+
+# Frontend
+/frontend/Dockerfile

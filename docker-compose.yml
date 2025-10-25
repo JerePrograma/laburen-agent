@@ -1,0 +1,67 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: laburen_db
+    environment:
+      POSTGRES_DB: laburen_ai_agent
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./server/db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d laburen_ai_agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [internal]
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: laburen_ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    expose:
+      - "11434" # interno; si querés desde host: ports: ["11434:11434"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+    networks: [internal]
+
+  app:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: laburen_app
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://app:app@db:5432/laburen_ai_agent
+      OLLAMA_BASE_URL: http://ollama:11434
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-anthropic/claude-3.5-haiku}
+      DOCS_ROOT: ../data
+      MAX_TOOL_ITERATIONS: 4
+      EMBEDDING_MODEL: nomic-embed-text
+      EMBEDDING_DIM: "768"
+      NEXT_PUBLIC_BACKEND_URL: https://TU_DOMINIO
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    networks: [internal]
+
+volumes:
+  pg_data:
+  ollama_data:
+
+networks:
+  internal:
+    driver: bridge

@@ -151,8 +151,7 @@ const stripPunct = (s: string) =>
     .trim();
 
 function extractPasscodeIntent(text: string): { name: string; passcode: string } | null {
-  const nameRe =
-    /\b(?:soy|me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ' -]{1,60}?)(?=[,.;:!?)]|\s|$)/i;
+  const nameRe = /\b(?:soy|me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ' -]{1,60}?)(?=[,.;:!?)]|\s|$)/i;
   const passRe = /\b(?:passcode|c(?:ó|o)digo|clave)\s*(?:es|:)?\s*([A-Za-z0-9-]{3,64})\b/i;
   const nameMatch = nameRe.exec(text);
   const passMatch = passRe.exec(text);
@@ -165,19 +164,21 @@ function extractPasscodeIntent(text: string): { name: string; passcode: string }
 
 // ----- Notas -----
 function extractRecordNote(msg: string) {
-  // “Registrá/Guardá/Anotá … nota … <texto>”
-  const re = /(registr(a|á|ar)|guard(a|á|ar)|anot(a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
-  const m = re.exec(msg);
-  const text = m?.[3] ? stripPunct(m[3]) : "";
-  return text.length >= 3 ? { text } : null;
+  // “Registrá/Guardá/Anotá … nota … <texto>” o “nota: …”
+  const re1 = /(registr(a|á|ar)|guard(a|á|ar)|anot(a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
+  const re2 = /\bnota\b\s*[:\-]\s*([\s\S]+)$/i;
+  const m = re1.exec(msg) ?? re2.exec(msg);
+  const text = m?.[3] ?? m?.[1] ?? "";
+  const cleaned = stripPunct(String(text));
+  return cleaned.length >= 3 ? { text: cleaned } : null;
 }
 
 // ----- Leads -----
 const emailRe = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i;
 function extractCreateLead(text: string) {
-  // "Creá un lead para Ana Torres con email ana@ejemplo.com desde LinkedIn."
+  // “Creá un lead para Ana ... con email/correo/mail x@x.com desde <fuente>”
   const m = text.match(
-    /lead\s+para\s+(.+?)\s+con\s+email\s+(.+?)(?:\s+(?:desde|de)\s+(.+?))?[.?!]*$/i
+    /lead\s+para\s+(.+?)\s+con\s+(?:correo|email|mail)\s+(.+?)(?:\s+(?:desde|de)\s+(.+?))?[.?!]*$/i
   );
   if (m) {
     const name = stripPunct(m[1]);
@@ -185,7 +186,7 @@ function extractCreateLead(text: string) {
     const source = stripPunct(m[3] ?? "");
     if (name && emailRe.test(email)) return { name, email, ...(source ? { source } : {}) };
   }
-  // fallback: "<nombre> <email> desde <source>"
+  // fallback: "<nombre> <email> [desde <source>]"
   const e = text.match(emailRe)?.[1];
   if (!e) return null;
   const before = text.slice(0, text.indexOf(e)).replace(/.*para\s+/i, "").trim();
@@ -196,13 +197,20 @@ function extractCreateLead(text: string) {
 
 // ----- Follow-ups: completar -----
 function extractCompleteFollowUp(text: string) {
-  const m = text.match(/follow[- ]?up\s*#?\s*(\d+)/i);
-  return m ? { followUpId: Number(m[1]) } : null;
+  const m = text.match(/(?:marc(a|á)|complet(a|á)|cerr(a|á)).*?follow[- ]?up\s*#?\s*(\d+)\b/i);
+  return m ? { followUpId: Number(m[2]) } : null;
 }
 
 // ----- Búsqueda en documentación -----
 function extractSearchDocs(text: string) {
-  if (/\b(onboarding|documentaci[óo]n|manual|gu[ií]a|pr[aá]cticas)\b/i.test(text) || /busc[ao]?\b/i.test(text)) {
+  const t = text.toLowerCase();
+  const isQuestion =
+    /[¿?]/.test(t) ||
+    /\b(c[oó]mo|qu[ée]|d[oó]nde|cu[aá]ndo|por qu[ée]|para qu[ée])\b/.test(t);
+  const hasDocsWords = /\b(documentaci[oó]n|manual|gu[ií]a|pr[aá]cticas|onboarding)\b/.test(t);
+  const hasTechWords = /\b(crm|integraci[oó]n|api|webhook|pipeline|postgres|ollama|embedding|embeddings?)\b/.test(t);
+  const explicitSearch = /^\s*busc(a|á|ar)\b/.test(t);
+  if (isQuestion || hasDocsWords || hasTechWords || explicitSearch) {
     return { question: stripPunct(text) };
   }
   return null;
@@ -215,9 +223,7 @@ function parseDueAtSpanish(msg: string): { when: Date; matched: string } | null 
   base.setHours(0, 0, 0, 0);
 
   // mañana / hoy / pasado mañana a las HH[:MM] [am|pm]
-  const rel = /(pasado\s+ma[ñn]ana|ma[ñn]ana|hoy)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(
-    msg
-  );
+  const rel = /(pasado\s+ma[ñn]ana|ma[ñn]ana|hoy)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(msg);
   if (rel) {
     const word = rel[1].toLowerCase();
     const hh = Number(rel[2]);
@@ -251,9 +257,9 @@ function parseDueAtSpanish(msg: string): { when: Date; matched: string } | null 
 
 function extractScheduleFollowUp(text: string) {
   const r = parseDueAtSpanish(text);
-  const raw = stripPunct(text);
   if (!r) return null;
-  // quita “agendá un follow-up”, conectores y la parte temporal
+  const raw = stripPunct(text);
+  // quita “agendá/programá … follow-up”, conectores y la parte temporal
   let title = raw
     .replace(/agend(a|á|ar)\s+un?\s+follow[- ]?up/gi, "")
     .replace(/program(a|á|ar)\s+un?\s+follow[- ]?up/gi, "")
@@ -264,7 +270,7 @@ function extractScheduleFollowUp(text: string) {
   return { title, dueAt: r.when };
 }
 
-// ---- Agent
+// ---- Agent fast-path (previo al bucle LLM)
 
 export async function runAgent(
   conversationId: string,
@@ -292,7 +298,6 @@ export async function runAgent(
       await saveSession(session);
       return null;
     }
-
     const typedName = toolName as ToolName;
     const def = tools[typedName];
     let parsedInput: unknown;
@@ -324,14 +329,8 @@ export async function runAgent(
         },
       });
 
-      session.history.push({
-        role: "assistant",
-        content: `TOOL_CALL ${typedName}: ${JSON.stringify(parsedInput)}`,
-      });
-      session.history.push({
-        role: "assistant",
-        content: `TOOL_RESULT ${typedName}: ${JSON.stringify(result)}`,
-      });
+      session.history.push({ role: "assistant", content: `TOOL_CALL ${typedName}: ${JSON.stringify(parsedInput)}` });
+      session.history.push({ role: "assistant", content: `TOOL_RESULT ${typedName}: ${JSON.stringify(result)}` });
 
       if (typedName === "verify_passcode" && status === "success") {
         session.authenticatedUser = (result as any)?.user;
@@ -354,10 +353,7 @@ export async function runAgent(
 
   const formatDateTime = (value: unknown) => {
     if (!value) return null;
-    const date =
-      value instanceof Date
-        ? value
-        : new Date(typeof value === "number" ? value : String(value));
+    const date = value instanceof Date ? value : new Date(typeof value === "number" ? value : String(value));
     if (Number.isNaN(date.valueOf())) return null;
     return date.toLocaleString();
   };
@@ -517,18 +513,6 @@ export async function runAgent(
     await saveSession(session);
   };
 
-  // Fast-path de autenticación por regex
-  if (!session.authenticatedUser) {
-    const creds = extractPasscodeIntent(userMessage);
-    if (creds) {
-      const outcome = await invokeTool("verify_passcode", creds);
-      if (outcome?.status === "success") {
-        await respondWithToolSuccess(outcome);
-        return;
-      }
-    }
-  }
-
   // 1) Auth fast-path
   if (!session.authenticatedUser) {
     const creds = extractPasscodeIntent(userMessage);
@@ -538,17 +522,47 @@ export async function runAgent(
     }
   }
 
-  // 2) Búsqueda en docs: siempre permitida (aún sin auth)
+  // 2) Búsqueda en docs: siempre permitida
   const q = extractSearchDocs(userMessage);
   if (q) {
     const outcome = await invokeTool("search_docs", q);
     if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
   }
 
-  const normalized = userMessage.toLowerCase();
-
+  // 3) Acciones y listados (solo si autenticado)
   if (session.authenticatedUser) {
-    // 3) Listados rápidos
+    // 3.a) Acciones explícitas primero
+
+    // Completar follow-up
+    const done = extractCompleteFollowUp(userMessage);
+    if (done) {
+      const outcome = await invokeTool("complete_followup", done);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+    }
+
+    // Agendar follow-up
+    const sched = extractScheduleFollowUp(userMessage);
+    if (sched) {
+      const outcome = await invokeTool("schedule_followup", sched);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+    }
+
+    // Crear lead
+    const lead = extractCreateLead(userMessage);
+    if (lead) {
+      const outcome = await invokeTool("create_lead", lead);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+    }
+
+    // Registrar nota
+    const note = extractRecordNote(userMessage);
+    if (note) {
+      const outcome = await invokeTool("record_note", note);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+    }
+
+    // 3.b) Listados
+    const normalized = userMessage.toLowerCase();
     const numberMatch = userMessage.match(/\b(\d{1,2})\b/);
     const limit = numberMatch ? Number(numberMatch[1]) : undefined;
 
@@ -562,44 +576,13 @@ export async function runAgent(
       if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    if (/(follow[- ]?up|seguimiento)/.test(normalized) &&
-        /(mostr|lista|listá|ver|consult|pendient|completad|completos?)/.test(normalized)) {
-      const status = /completad|completos?/.test(normalized)
-        ? "completed"
-        : /pendient/.test(normalized)
+    if (/(follow[- ]?up|seguimiento)/.test(normalized) && /(mostr|lista|listá|ver|consult)/.test(normalized)) {
+      const status = /\bpendient/.test(normalized)
         ? "pending"
+        : /\bcompletad|completos?\b/.test(normalized)
+        ? "completed"
         : undefined;
       const outcome = await invokeTool("list_followups", { ...(status ? { status } : {}), ...(limit ? { limit } : {}) });
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
-    }
-
-    // 4) Altas/acciones sin LLM
-
-    // 4.a) Crear lead
-    const lead = extractCreateLead(userMessage);
-    if (lead) {
-      const outcome = await invokeTool("create_lead", lead);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
-    }
-
-    // 4.b) Registrar nota
-    const note = extractRecordNote(userMessage);
-    if (note) {
-      const outcome = await invokeTool("record_note", note);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
-    }
-
-    // 4.c) Agendar follow-up
-    const sched = extractScheduleFollowUp(userMessage);
-    if (sched) {
-      const outcome = await invokeTool("schedule_followup", sched);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
-    }
-
-    // 4.d) Completar follow-up
-    const done = extractCompleteFollowUp(userMessage);
-    if (done) {
-      const outcome = await invokeTool("complete_followup", done);
       if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
   }

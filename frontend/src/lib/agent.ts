@@ -163,35 +163,105 @@ function extractPasscodeIntent(text: string): { name: string; passcode: string }
   return { name, passcode };
 }
 
-function extractNoteText(msg: string): string | null {
-  // “registrá/guardá/anotá … nota … <texto>”
+// ----- Notas -----
+function extractRecordNote(msg: string) {
+  // “Registrá/Guardá/Anotá … nota … <texto>”
   const re = /(registr(a|á|ar)|guard(a|á|ar)|anot(a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
   const m = re.exec(msg);
-  const text = m?.[3] ? stripPunct(m[3]) : null;
-  return text && text.length >= 3 ? text : null;
+  const text = m?.[3] ? stripPunct(m[3]) : "";
+  return text.length >= 3 ? { text } : null;
 }
 
-function parseDueAtSpanish(msg: string): Date | null {
+// ----- Leads -----
+const emailRe = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i;
+function extractCreateLead(text: string) {
+  // "Creá un lead para Ana Torres con email ana@ejemplo.com desde LinkedIn."
+  const m = text.match(
+    /lead\s+para\s+(.+?)\s+con\s+email\s+(.+?)(?:\s+(?:desde|de)\s+(.+?))?[.?!]*$/i
+  );
+  if (m) {
+    const name = stripPunct(m[1]);
+    const email = (m[2].match(emailRe)?.[1] ?? m[2]).trim();
+    const source = stripPunct(m[3] ?? "");
+    if (name && emailRe.test(email)) return { name, email, ...(source ? { source } : {}) };
+  }
+  // fallback: "<nombre> <email> desde <source>"
+  const e = text.match(emailRe)?.[1];
+  if (!e) return null;
+  const before = text.slice(0, text.indexOf(e)).replace(/.*para\s+/i, "").trim();
+  const src = text.slice(text.indexOf(e) + e.length).match(/(?:desde|de)\s+(.+?)$/i)?.[1]?.trim();
+  const name = stripPunct(before);
+  return name && emailRe.test(e) ? { name, email: e, ...(src ? { source: stripPunct(src) } : {}) } : null;
+}
+
+// ----- Follow-ups: completar -----
+function extractCompleteFollowUp(text: string) {
+  const m = text.match(/follow[- ]?up\s*#?\s*(\d+)/i);
+  return m ? { followUpId: Number(m[1]) } : null;
+}
+
+// ----- Búsqueda en documentación -----
+function extractSearchDocs(text: string) {
+  if (/\b(onboarding|documentaci[óo]n|manual|gu[ií]a|pr[aá]cticas)\b/i.test(text) || /busc[ao]?\b/i.test(text)) {
+    return { question: stripPunct(text) };
+  }
+  return null;
+}
+
+// ----- Follow-ups: agendar con fechas en ES -----
+function parseDueAtSpanish(msg: string): { when: Date; matched: string } | null {
   const now = new Date();
-  let dayOffset = 0;
-  if (/\bpasado\s+mañana\b/i.test(msg)) dayOffset = 2;
-  else if (/\bmañana\b/i.test(msg)) dayOffset = 1;
-  else if (/\bhoy\b/i.test(msg)) dayOffset = 0;
-  else return null;
+  const base = new Date(now);
+  base.setHours(0, 0, 0, 0);
 
-  const hm = /(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(msg);
-  const h = hm ? parseInt(hm[1], 10) : 9;
-  const min = hm?.[2] ? parseInt(hm[2], 10) : 0;
-  const ampm = hm?.[3]?.toLowerCase();
-  let hour = h;
-  if (ampm === "pm" && hour < 12) hour += 12;
-  if (ampm === "am" && hour === 12) hour = 0;
+  // mañana / hoy / pasado mañana a las HH[:MM] [am|pm]
+  const rel = /(pasado\s+ma[ñn]ana|ma[ñn]ana|hoy)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(
+    msg
+  );
+  if (rel) {
+    const word = rel[1].toLowerCase();
+    const hh = Number(rel[2]);
+    const mm = rel[3] ? Number(rel[3]) : 0;
+    const ap = rel[4]?.toLowerCase();
+    let d = new Date(base);
+    if (/pasado/.test(word)) d.setDate(d.getDate() + 2);
+    else if (/ma[ñn]ana/.test(word)) d.setDate(d.getDate() + 1);
+    let H = hh;
+    if (ap === "pm" && H < 12) H += 12;
+    if (ap === "am" && H === 12) H = 0;
+    d.setHours(H, mm, 0, 0);
+    return { when: d, matched: rel[0] };
+  }
 
-  const d = new Date(now);
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + dayOffset);
-  d.setHours(hour, min, 0, 0);
-  return d;
+  // dd/mm a las HH[:MM]
+  const abs = /(\d{1,2})\/(\d{1,2}).*?a\s+las\s+(\d{1,2})(?::(\d{2}))?/i.exec(msg);
+  if (abs) {
+    const day = Number(abs[1]);
+    const mon = Number(abs[2]) - 1;
+    const hh = Number(abs[3]);
+    const mm = abs[4] ? Number(abs[4]) : 0;
+    const d = new Date(base);
+    d.setMonth(mon, day);
+    d.setHours(hh, mm, 0, 0);
+    return { when: d, matched: abs[0] };
+  }
+
+  return null;
+}
+
+function extractScheduleFollowUp(text: string) {
+  const r = parseDueAtSpanish(text);
+  const raw = stripPunct(text);
+  if (!r) return null;
+  // quita “agendá un follow-up”, conectores y la parte temporal
+  let title = raw
+    .replace(/agend(a|á|ar)\s+un?\s+follow[- ]?up/gi, "")
+    .replace(/program(a|á|ar)\s+un?\s+follow[- ]?up/gi, "")
+    .replace(new RegExp(r.matched.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), "")
+    .replace(/\b(para|con|sobre)\b/gi, "")
+    .trim();
+  if (!title || title.length < 3) title = "Follow-up";
+  return { title, dueAt: r.when };
 }
 
 // ---- Agent
@@ -459,79 +529,78 @@ export async function runAgent(
     }
   }
 
+  // 1) Auth fast-path
+  if (!session.authenticatedUser) {
+    const creds = extractPasscodeIntent(userMessage);
+    if (creds) {
+      const outcome = await invokeTool("verify_passcode", creds);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+    }
+  }
+
+  // 2) Búsqueda en docs: siempre permitida (aún sin auth)
+  const q = extractSearchDocs(userMessage);
+  if (q) {
+    const outcome = await invokeTool("search_docs", q);
+    if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+  }
+
   const normalized = userMessage.toLowerCase();
 
   if (session.authenticatedUser) {
-    // Listados rápidos
+    // 3) Listados rápidos
     const numberMatch = userMessage.match(/\b(\d{1,2})\b/);
     const limit = numberMatch ? Number(numberMatch[1]) : undefined;
 
-    const wantsNoteList =
-      /nota/.test(normalized) && /(mostr|lista|listá|ver|consult)/.test(normalized);
-    if (wantsNoteList) {
+    if (/nota/.test(normalized) && /(mostr|lista|listá|ver|consult)/.test(normalized)) {
       const outcome = await invokeTool("list_notes", limit ? { limit } : {});
-      if (outcome?.status === "success") {
-        await respondWithToolSuccess(outcome);
-        return;
-      }
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    const wantsLeadList =
-      /lead/.test(normalized) && /(mostr|lista|listá|ver|consult)/.test(normalized);
-    if (wantsLeadList) {
+    if (/lead/.test(normalized) && /(mostr|lista|listá|ver|consult)/.test(normalized)) {
       const outcome = await invokeTool("list_leads", limit ? { limit } : {});
-      if (outcome?.status === "success") {
-        await respondWithToolSuccess(outcome);
-        return;
-      }
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    const wantsFollowupList =
-      /(follow[- ]?up|seguimiento)/.test(normalized) &&
-      /(mostr|lista|listá|ver|consult|pendient|completad|completos?)/.test(normalized);
-    if (wantsFollowupList) {
+    if (/(follow[- ]?up|seguimiento)/.test(normalized) &&
+        /(mostr|lista|listá|ver|consult|pendient|completad|completos?)/.test(normalized)) {
       const status = /completad|completos?/.test(normalized)
         ? "completed"
         : /pendient/.test(normalized)
         ? "pending"
         : undefined;
-      const outcome = await invokeTool("list_followups", {
-        ...(status ? { status } : {}),
-        ...(limit ? { limit } : {}),
-      });
-      if (outcome?.status === "success") {
-        await respondWithToolSuccess(outcome);
-        return;
-      }
+      const outcome = await invokeTool("list_followups", { ...(status ? { status } : {}), ...(limit ? { limit } : {}) });
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    // Altas rápidas sin LLM
+    // 4) Altas/acciones sin LLM
 
-    // Crear NOTA
-    const noteText = extractNoteText(userMessage);
-    if (noteText) {
-      const outcome = await invokeTool("record_note", { text: noteText });
-      if (outcome?.status === "success") {
-        await respondWithToolSuccess(outcome);
-        return;
-      }
+    // 4.a) Crear lead
+    const lead = extractCreateLead(userMessage);
+    if (lead) {
+      const outcome = await invokeTool("create_lead", lead);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    // Agendar FOLLOW-UP
-    const wantsFU = /(agend(a|á|ar)|program(a|á|ar)).*?(follow[- ]?up|seguim(i|í)ento)/i.test(
-      userMessage
-    );
-    if (wantsFU) {
-      const dueAt = parseDueAtSpanish(userMessage) || undefined;
-      const titleMatch = /(?:para|con|sobre)\s+(.+)$/i.exec(userMessage);
-      const title = stripPunct(titleMatch?.[1] ?? "Seguimiento");
-      const payload: any = { title };
-      if (dueAt) payload.dueAt = dueAt;
-      const outcome = await invokeTool("schedule_followup", payload);
-      if (outcome?.status === "success") {
-        await respondWithToolSuccess(outcome);
-        return;
-      }
+    // 4.b) Registrar nota
+    const note = extractRecordNote(userMessage);
+    if (note) {
+      const outcome = await invokeTool("record_note", note);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+    }
+
+    // 4.c) Agendar follow-up
+    const sched = extractScheduleFollowUp(userMessage);
+    if (sched) {
+      const outcome = await invokeTool("schedule_followup", sched);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+    }
+
+    // 4.d) Completar follow-up
+    const done = extractCompleteFollowUp(userMessage);
+    if (done) {
+      const outcome = await invokeTool("complete_followup", done);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
   }
 

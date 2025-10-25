@@ -165,10 +165,10 @@ function extractPasscodeIntent(text: string): { name: string; passcode: string }
 // ----- Notas -----
 function extractRecordNote(msg: string) {
   // “Registrá/Guardá/Anotá … nota … <texto>” o “nota: …”
-  const re1 = /(registr(a|á|ar)|guard(a|á|ar)|anot(a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
+  const re1 = /(?:registr(?:a|á|ar)|guard(?:a|á|ar)|anot(?:a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
   const re2 = /\bnota\b\s*[:\-]\s*([\s\S]+)$/i;
   const m = re1.exec(msg) ?? re2.exec(msg);
-  const text = (m?.[3] ?? m?.[1] ?? "").toString();
+  const text = (m?.[1] ?? "").toString();
   const cleaned = stripPunct(text);
   return cleaned.length >= 3 ? { text: cleaned } : null;
 }

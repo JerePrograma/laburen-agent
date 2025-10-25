@@ -28,13 +28,27 @@ export type AgentEvent =
 
 export type AgentEventEmitter = (event: AgentEvent) => void;
 
-const PlanSchema = z.object({
-  thought: z.string().default(""),
-  action: z.enum(["tool", "respond"]),
-  tool: z.object({ name: z.string(), input: z.unknown().optional() }).nullable().optional(),
-  final_response: z.string().nullable().optional(),
-  confidence: z.enum(["low", "medium", "high"]).optional(),
-});
+const TOOL_NAMES = Object.keys(tools) as [string, ...string[]];
+
+const PlanSchema = z.discriminatedUnion("action", [
+  z.object({
+    thought: z.string().default(""),
+    action: z.literal("tool"),
+    tool: z.object({
+      name: z.enum(TOOL_NAMES),
+      input: z.unknown().optional(),
+    }),
+    final_response: z.null().optional(),
+    confidence: z.enum(["low","medium","high"]).optional(),
+  }),
+  z.object({
+    thought: z.string().default(""),
+    action: z.literal("respond"),
+    final_response: z.string().min(1),
+    tool: z.null().optional(),
+    confidence: z.enum(["low","medium","high"]).optional(),
+  }),
+]);
 
 const BASE_PROMPT = `Eres Laburen Agent, un agente de producto que ayuda a equipos comerciales.
 Devuelve SOLO un JSON válido, sin texto extra, con: thought, action, tool, final_response.

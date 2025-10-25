@@ -3,9 +3,12 @@ import { query } from "@/lib/db";
 import { searchDocuments } from "@/lib/rag";
 import type { AgentSession } from "@/lib/session-store";
 
-export interface ToolExecutionContext { session: AgentSession; }
+export interface ToolExecutionContext {
+  session: AgentSession;
+}
 export interface ToolDefinition<TInput = any, TResult = any> {
-  name: string; description: string;
+  name: string;
+  description: string;
   schema: z.ZodType<TInput>;
   execute: (input: TInput, context: ToolExecutionContext) => Promise<TResult>;
 }
@@ -52,13 +55,20 @@ export const tools: ToolRegistry = {
     schema: verifyPasscodeSchema,
     async execute(input) {
       const r = await query<{ id: number; name: string }>(
-        `SELECT id, name FROM invited_user
-         WHERE LOWER(name) = LOWER($1) AND passcode = $2
-         LIMIT 1`,
+        `SELECT id, name
+     FROM invited_user
+    WHERE unaccent(lower(name)) = unaccent(lower($1))
+      AND passcode = $2
+    LIMIT 1`,
         [input.name.trim(), input.passcode.trim()]
       );
-      if (r.rowCount === 0) return { success: false, message: "Nombre o código inválido" };
-      return { success: true, user: r.rows[0], message: `Usuario verificado: ${r.rows[0].name}` };
+      if (r.rowCount === 0)
+        return { success: false, message: "Nombre o código inválido" };
+      return {
+        success: true,
+        user: r.rows[0],
+        message: `Usuario verificado: ${r.rows[0].name}`,
+      };
     },
   },
   create_lead: {
@@ -66,13 +76,26 @@ export const tools: ToolRegistry = {
     description: "Crea un lead potencial.",
     schema: createLeadSchema,
     async execute(input, ctx) {
-      if (!ctx.session.authenticatedUser) return { success: false, message: "No autenticado" };
-      const name = input.name.trim(), email = input.email.trim(), source = input.source?.trim();
+      if (!ctx.session.authenticatedUser)
+        return { success: false, message: "No autenticado" };
+      const name = input.name.trim(),
+        email = input.email.trim(),
+        source = input.source?.trim();
       const r = await query<{ id: number; created_at: string }>(
         `INSERT INTO lead(name, email, source) VALUES ($1,$2,$3) RETURNING id, created_at`,
         [name, email, source ?? null]
       );
-      return { success: true, lead: { id: r.rows[0].id, name, email, source: source ?? null, createdAt: r.rows[0].created_at }, message: "Lead registrado" };
+      return {
+        success: true,
+        lead: {
+          id: r.rows[0].id,
+          name,
+          email,
+          source: source ?? null,
+          createdAt: r.rows[0].created_at,
+        },
+        message: "Lead registrado",
+      };
     },
   },
   record_note: {
@@ -80,13 +103,20 @@ export const tools: ToolRegistry = {
     description: "Guarda una nota vinculada al usuario autenticado.",
     schema: noteSchema,
     async execute(input, ctx) {
-      if (!ctx.session.authenticatedUser) return { success: false, message: "No autenticado" };
+      if (!ctx.session.authenticatedUser)
+        return { success: false, message: "No autenticado" };
       const text = input.text.trim();
       const r = await query<{ id: number; created_at: string }>(
         `INSERT INTO note(user_id, text) VALUES ($1,$2) RETURNING id, created_at`,
         [ctx.session.authenticatedUser.id, text]
       );
-      return { success: true, noteId: r.rows[0].id, createdAt: r.rows[0].created_at, text, message: "Nota guardada" };
+      return {
+        success: true,
+        noteId: r.rows[0].id,
+        createdAt: r.rows[0].created_at,
+        text,
+        message: "Nota guardada",
+      };
     },
   },
   list_notes: {
@@ -94,7 +124,8 @@ export const tools: ToolRegistry = {
     description: "Recupera notas previas del usuario autenticado.",
     schema: listNotesSchema,
     async execute(input, ctx) {
-      if (!ctx.session.authenticatedUser) return { success: false, message: "No autenticado" };
+      if (!ctx.session.authenticatedUser)
+        return { success: false, message: "No autenticado" };
       const limit = input.limit ?? 10;
       const r = await query<{ id: number; text: string; created_at: string }>(
         `SELECT id, text, created_at
@@ -114,7 +145,9 @@ export const tools: ToolRegistry = {
         message:
           r.rowCount === 0
             ? "No se encontraron notas previas."
-            : `Se recuperaron ${r.rowCount} nota${r.rowCount === 1 ? "" : "s"}.`,
+            : `Se recuperaron ${r.rowCount} nota${
+                r.rowCount === 1 ? "" : "s"
+              }.`,
       };
     },
   },
@@ -123,14 +156,18 @@ export const tools: ToolRegistry = {
     description: "Elimina una nota propia por ID.",
     schema: deleteNoteSchema,
     async execute(input, ctx) {
-      if (!ctx.session.authenticatedUser) return { success: false, message: "No autenticado" };
+      if (!ctx.session.authenticatedUser)
+        return { success: false, message: "No autenticado" };
       const noteId = Number(input.noteId);
       const r = await query<{ id: number; text: string; created_at: string }>(
         `DELETE FROM note WHERE id = $1 AND user_id = $2 RETURNING id, text, created_at`,
         [noteId, ctx.session.authenticatedUser.id]
       );
       if (r.rowCount === 0) {
-        return { success: false, message: "No se encontró una nota con ese ID" };
+        return {
+          success: false,
+          message: "No se encontró una nota con ese ID",
+        };
       }
       const row = r.rows[0];
       return {
@@ -146,7 +183,13 @@ export const tools: ToolRegistry = {
     schema: listLeadsSchema,
     async execute(input) {
       const limit = input.limit ?? 10;
-      const r = await query<{ id: number; name: string; email: string; source: string | null; created_at: string }>(
+      const r = await query<{
+        id: number;
+        name: string;
+        email: string;
+        source: string | null;
+        created_at: string;
+      }>(
         `SELECT id, name, email, source, created_at
          FROM lead
          ORDER BY created_at DESC
@@ -174,11 +217,16 @@ export const tools: ToolRegistry = {
     description: "Agenda un follow-up para el usuario autenticado.",
     schema: scheduleFollowupSchema,
     async execute(input, ctx) {
-      if (!ctx.session.authenticatedUser) return { success: false, message: "No autenticado" };
+      if (!ctx.session.authenticatedUser)
+        return { success: false, message: "No autenticado" };
       const title = input.title.trim();
       const dueAt = input.dueAt ? input.dueAt.toISOString() : null;
       const notes = input.notes?.trim() || null;
-      const r = await query<{ id: number; created_at: string; due_at: string | null }>(
+      const r = await query<{
+        id: number;
+        created_at: string;
+        due_at: string | null;
+      }>(
         `INSERT INTO follow_up(user_id, title, due_at, notes)
          VALUES ($1, $2, $3, $4)
          RETURNING id, created_at, due_at`,
@@ -203,7 +251,8 @@ export const tools: ToolRegistry = {
     description: "Enumera follow-ups del usuario autenticado.",
     schema: listFollowupsSchema,
     async execute(input, ctx) {
-      if (!ctx.session.authenticatedUser) return { success: false, message: "No autenticado" };
+      if (!ctx.session.authenticatedUser)
+        return { success: false, message: "No autenticado" };
       const status = input.status ?? "pending";
       const limit = input.limit ?? 10;
       const r = await query<{
@@ -236,7 +285,9 @@ export const tools: ToolRegistry = {
         message:
           r.rowCount === 0
             ? "No hay follow-ups en ese estado."
-            : `Se listaron ${r.rowCount} follow-up${r.rowCount === 1 ? "" : "s"}.`,
+            : `Se listaron ${r.rowCount} follow-up${
+                r.rowCount === 1 ? "" : "s"
+              }.`,
       };
     },
   },
@@ -245,7 +296,8 @@ export const tools: ToolRegistry = {
     description: "Marca como completado un follow-up propio.",
     schema: completeFollowupSchema,
     async execute(input, ctx) {
-      if (!ctx.session.authenticatedUser) return { success: false, message: "No autenticado" };
+      if (!ctx.session.authenticatedUser)
+        return { success: false, message: "No autenticado" };
       const followUpId = Number(input.followUpId);
       const r = await query<{
         id: number;
@@ -260,7 +312,10 @@ export const tools: ToolRegistry = {
         [followUpId, ctx.session.authenticatedUser.id]
       );
       if (r.rowCount === 0) {
-        return { success: false, message: "No se encontró un follow-up con ese ID" };
+        return {
+          success: false,
+          message: "No se encontró un follow-up con ese ID",
+        };
       }
       const row = r.rows[0];
       return {

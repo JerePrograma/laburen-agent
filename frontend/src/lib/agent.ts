@@ -141,18 +141,20 @@ async function emitStreamingText(emit: AgentEventEmitter, text: string) {
   return id;
 }
 
-// Fast-path: detectar "soy X, mi passcode es Y" sin depender del LLM
+const stripPunct = (s: string) =>
+  s.replace(/^[^A-Za-zÁÉÍÓÚÑáéíóúñ]+|[^A-Za-zÁÉÍÓÚÑáéíóúñ' -]+$/g, "")
+   .replace(/\s+/g, " ").trim();
+
 function extractPasscodeIntent(text: string): { name: string; passcode: string } | null {
-  const nameMatch = text.match(
-    /\b(?:soy|me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ][\wÁÉÍÓÚÑáéíóúñ .'-]{1,60})/i
-  );
-  const passMatch = text.match(
-    /\b(?:passcode|c(?:ó|o)digo|clave)\s*(?:es|:)?\s*([A-Za-z0-9-]{3,64})/i
-  );
-  if (nameMatch && passMatch) {
-    return { name: nameMatch[1].trim(), passcode: passMatch[1].trim() };
-  }
-  return null;
+  const nameRe = /\b(?:soy|me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ' -]{1,60}?)(?=[,.;:!?)]|\s|$)/i;
+  const passRe = /\b(?:passcode|c(?:ó|o)digo|clave)\s*(?:es|:)?\s*([A-Za-z0-9-]{3,64})\b/i;
+  const nameMatch = nameRe.exec(text);
+  const passMatch = passRe.exec(text);
+  if (!nameMatch || !passMatch) return null;
+  const name = stripPunct(nameMatch[1]);
+  const passcode = passMatch[1].trim();
+  if (!name || !passcode) return null;
+  return { name, passcode };
 }
 
 export async function runAgent(

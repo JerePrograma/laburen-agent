@@ -323,7 +323,11 @@ export function useAgentConversation() {
     }
     return [
       "Creá un lead para Ana Torres con email ana@ejemplo.com desde LinkedIn.",
+      "Mostrame los últimos leads cargados.",
       "Registrá una nota con los próximos pasos de la demo.",
+      "Mostrame las notas que tengo registradas.",
+      "Agendá un follow-up para mañana a las 15 con la demo.",
+      "Marcá como completado el follow-up 3.",
       "Buscá buenas prácticas comerciales en la documentación.",
     ];
   }, [agentState.authenticatedUser]);

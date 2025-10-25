@@ -42,6 +42,21 @@ CREATE TABLE IF NOT EXISTS note (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- Seguimiento de follow-ups para demos y tareas comerciales
+CREATE TABLE IF NOT EXISTS follow_up (
+  id SERIAL PRIMARY KEY,
+  user_id INT REFERENCES invited_user(id),
+  title TEXT NOT NULL,
+  due_at TIMESTAMPTZ,
+  notes TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMPTZ DEFAULT now(),
+  completed_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS follow_up_user_status_due_idx
+  ON follow_up (user_id, status, due_at NULLS LAST, created_at DESC);
+
 -- Sesiones persistentes
 CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,

@@ -12,6 +12,12 @@ Agente conversacional de producto: autenticación vía chat, RAG sobre documenta
   - `verify_passcode`: valida nombre + passcode en `invited_user`.
   - `create_lead`: inserta en `lead`.
   - `record_note`: guarda notas asociadas.
+  - `list_notes`: lista notas previas del usuario autenticado.
+  - `delete_note`: elimina una nota existente del usuario autenticado.
+  - `list_leads`: enumera los leads más recientes cargados en la base.
+  - `schedule_followup`: agenda un seguimiento en la tabla `follow_up`.
+  - `list_followups`: muestra follow-ups pendientes o completados.
+  - `complete_followup`: marca un follow-up como cerrado.
   - `search_docs`: RAG con `doc_chunk` usando `<=>` (cosine).
 - **RAG**: Markdown en `/data`, indexados con `scripts/ingest.ts`.
 - **Streaming**: SSE (pensamientos, tools, tokens).
@@ -30,7 +36,7 @@ Agente conversacional de producto: autenticación vía chat, RAG sobre documenta
 1) **Clonar** y crear `.env` en la raíz del repo:
 ```bash
 cp .env.example .env
-````
+```
 
 Valores esperados (ejemplo):
 
@@ -95,8 +101,16 @@ npm run dev
 
 1. Presentate con nombre + passcode (ver seeds en `server/db/init.sql`).
 2. El agente ejecuta `verify_passcode`.
-3. Podés crear leads, registrar notas y preguntar por la documentación (RAG).
+3. Podés crear leads, registrar/consultar/eliminar notas, agendar y listar follow-ups, y preguntar por la documentación (RAG).
 4. La UI muestra pasos, tools y tokens en tiempo real (SSE).
+
+> En el compositor del chat, Enter envía el mensaje y Shift+Enter inserta un salto de línea.
+
+### Funciones listas para demo
+
+- Comandos rápidos: si pedís directamente “mostrame mis notas”, “mostrame los leads” o “mostrame los follow-ups completados”, el agente invoca la tool correspondiente sin depender del LLM (mejora resiliencia ante JSON inválido).
+- Gestión de follow-ups: `schedule_followup`, `list_followups` y `complete_followup` permiten mostrar un flujo end-to-end de planificación y cierre de tareas comerciales.
+- Operaciones sobre notas: además de registrar, ahora se pueden listar y eliminar notas sin salir del chat.
 
 ## Scripts útiles
 
@@ -161,4 +175,4 @@ docker exec laburen_db psql -U app -d laburen_ai_agent -c "SELECT COUNT(*) FROM 
 
 ---
 
-Licencia: solo uso educativo/demostrativo para el challenge.
+Licencia: solo uso demostrativo para el challenge.

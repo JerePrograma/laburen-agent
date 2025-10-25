@@ -36,9 +36,15 @@ const KEYWORD_GUIDE: Array<{
     example: "Registrá una nota con los próximos pasos de la demo.",
   },
   {
+    category: "Seguimientos",
+    description: "Para agendar y cerrar follow-ups comerciales.",
+    keywords: ["follow-up", "agendá", "seguimiento", "completá"],
+    example: "Agendá un follow-up para mañana a las 15 con la demo.",
+  },
+  {
     category: "Documentación",
     description: "Para buscar guías y mejores prácticas en la base de conocimiento.",
-    keywords: ["buscá", "consultá", "mostrame"],
+    keywords: ["buscá", "consultá", "documentación"],
     example: "Buscá buenas prácticas comerciales en la documentación.",
   },
 ];
@@ -172,6 +178,81 @@ function formatToolSummary(call: ClientToolCall) {
       return formatLeadSummary(call);
     case "record_note":
       return formatNoteSummary(call);
+    case "list_notes": {
+      const result = (call.result as any) ?? {};
+      const notes = Array.isArray(result.notes) ? result.notes : [];
+      if (!notes.length) return result.message ?? "Sin notas";
+      const first = notes[0];
+      const created = first?.createdAt ? new Date(first.createdAt).toLocaleString() : null;
+      const snippet =
+        typeof first?.text === "string" && first.text.trim().length
+          ? first.text.trim().length > 90
+            ? `${first.text.trim().slice(0, 87)}…`
+            : first.text.trim()
+          : "(sin detalle)";
+      return [`${notes.length} nota${notes.length === 1 ? "" : "s"}`, `Última: ${snippet}`, created]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "delete_note": {
+      const deleted = (call.result as any)?.deleted;
+      const when = deleted?.createdAt ? new Date(deleted.createdAt).toLocaleString() : null;
+      const snippet =
+        typeof deleted?.text === "string" && deleted.text.trim().length
+          ? deleted.text.trim().length > 90
+            ? `${deleted.text.trim().slice(0, 87)}…`
+            : deleted.text.trim()
+          : null;
+      return [`Nota ${deleted?.id ?? ""} eliminada`, snippet, when].filter(Boolean).join("\n");
+    }
+    case "list_leads": {
+      const result = (call.result as any) ?? {};
+      const leads = Array.isArray(result.leads) ? result.leads : [];
+      if (!leads.length) return result.message ?? "Sin leads";
+      const first = leads[0];
+      const created = first?.createdAt ? new Date(first.createdAt).toLocaleString() : null;
+      const email = first?.email ? `<${first.email}>` : null;
+      return [
+        `${leads.length} lead${leads.length === 1 ? "" : "s"}`,
+        `${first?.name ?? "Sin nombre"} ${email ?? ""}`.trim(),
+        created,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "schedule_followup": {
+      const followUp = (call.result as any)?.followUp ?? {};
+      const due = followUp?.dueAt ? new Date(followUp.dueAt).toLocaleString() : "sin fecha";
+      return [`Follow-up ${followUp.id ?? ""}`, followUp.title ?? "", `Vence: ${due}`]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "list_followups": {
+      const result = (call.result as any) ?? {};
+      const followUps = Array.isArray(result.followUps) ? result.followUps : [];
+      if (!followUps.length) return result.message ?? "Sin follow-ups";
+      const first = followUps[0];
+      const due = first?.dueAt ? new Date(first.dueAt).toLocaleString() : "sin fecha";
+      return [
+        `${followUps.length} follow-up${followUps.length === 1 ? "" : "s"}`,
+        `${first?.title ?? "Sin título"} (${first?.status ?? ""})`,
+        `Vence: ${due}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    case "complete_followup": {
+      const followUp = (call.result as any)?.followUp ?? {};
+      const completed = followUp?.completedAt
+        ? new Date(followUp.completedAt).toLocaleString()
+        : null;
+      return [
+        `Follow-up ${followUp.id ?? ""} completado`,
+        completed ? `Cierre: ${completed}` : null,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
     case "search_docs":
       return formatSearchSummary(call);
     default:
@@ -188,6 +269,18 @@ function formatToolTitle(call: ClientToolCall) {
       return "Lead creado";
     case "record_note":
       return "Nota guardada";
+    case "list_notes":
+      return "Notas listadas";
+    case "delete_note":
+      return "Nota eliminada";
+    case "list_leads":
+      return "Leads listados";
+    case "schedule_followup":
+      return "Follow-up agendado";
+    case "list_followups":
+      return "Follow-ups listados";
+    case "complete_followup":
+      return "Follow-up completado";
     case "search_docs":
       return "Búsqueda de documentos";
     default:

@@ -2,7 +2,7 @@
 "use client";
 
 import { useCallback, useMemo } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, KeyboardEvent } from "react";
 import { MessageCard } from "@/components/MessageCard";
 import { AgentStatusPanel } from "@/components/AgentStatusPanel";
 import { TraceTimeline } from "@/components/TraceTimeline";
@@ -64,6 +64,22 @@ export default function HomePage() {
       if (sent) setInput("");
     },
     [conversationId, isStreaming, sendMessage, setInput]
+  );
+
+  const handleComposerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (
+        event.key !== "Enter" ||
+        event.shiftKey ||
+        event.nativeEvent.isComposing
+      ) {
+        return;
+      }
+      event.preventDefault();
+      if (isStreaming || !input.trim()) return;
+      void submitCurrentMessage();
+    },
+    [input, isStreaming, submitCurrentMessage]
   );
 
   return (
@@ -135,6 +151,7 @@ export default function HomePage() {
             placeholder="Escribí un mensaje..."
             value={input}
             onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleComposerKeyDown}
             disabled={isStreaming}
             aria-label="Mensaje para el agente"
           />

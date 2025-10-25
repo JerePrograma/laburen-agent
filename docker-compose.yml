@@ -39,7 +39,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_BACKEND_URL: https://jereprograma.com
+        NEXT_PUBLIC_BACKEND_URL: https://app.jereprograma.com
     container_name: laburen_app
     environment:
       NODE_ENV: production

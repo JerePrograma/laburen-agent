@@ -1,3 +1,4 @@
+// src/lib/agent.ts
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { jsonrepair } from "jsonrepair";
@@ -39,14 +40,14 @@ const PlanSchema = z.discriminatedUnion("action", [
       input: z.unknown().optional(),
     }),
     final_response: z.null().optional(),
-    confidence: z.enum(["low","medium","high"]).optional(),
+    confidence: z.enum(["low", "medium", "high"]).optional(),
   }),
   z.object({
     thought: z.string().default(""),
     action: z.literal("respond"),
     final_response: z.string().min(1),
     tool: z.null().optional(),
-    confidence: z.enum(["low","medium","high"]).optional(),
+    confidence: z.enum(["low", "medium", "high"]).optional(),
   }),
 ]);
 
@@ -141,12 +142,17 @@ async function emitStreamingText(emit: AgentEventEmitter, text: string) {
   return id;
 }
 
+// ---- Fast-path helpers
+
 const stripPunct = (s: string) =>
-  s.replace(/^[^A-Za-zÁÉÍÓÚÑáéíóúñ]+|[^A-Za-zÁÉÍÓÚÑáéíóúñ' -]+$/g, "")
-   .replace(/\s+/g, " ").trim();
+  s
+    .replace(/^[^A-Za-zÁÉÍÓÚÑáéíóúñ]+|[^A-Za-zÁÉÍÓÚÑáéíóúñ0-9'() :.,-]+$/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
 function extractPasscodeIntent(text: string): { name: string; passcode: string } | null {
-  const nameRe = /\b(?:soy|me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ' -]{1,60}?)(?=[,.;:!?)]|\s|$)/i;
+  const nameRe =
+    /\b(?:soy|me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ' -]{1,60}?)(?=[,.;:!?)]|\s|$)/i;
   const passRe = /\b(?:passcode|c(?:ó|o)digo|clave)\s*(?:es|:)?\s*([A-Za-z0-9-]{3,64})\b/i;
   const nameMatch = nameRe.exec(text);
   const passMatch = passRe.exec(text);
@@ -156,6 +162,39 @@ function extractPasscodeIntent(text: string): { name: string; passcode: string }
   if (!name || !passcode) return null;
   return { name, passcode };
 }
+
+function extractNoteText(msg: string): string | null {
+  // “registrá/guardá/anotá … nota … <texto>”
+  const re = /(registr(a|á|ar)|guard(a|á|ar)|anot(a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
+  const m = re.exec(msg);
+  const text = m?.[3] ? stripPunct(m[3]) : null;
+  return text && text.length >= 3 ? text : null;
+}
+
+function parseDueAtSpanish(msg: string): Date | null {
+  const now = new Date();
+  let dayOffset = 0;
+  if (/\bpasado\s+mañana\b/i.test(msg)) dayOffset = 2;
+  else if (/\bmañana\b/i.test(msg)) dayOffset = 1;
+  else if (/\bhoy\b/i.test(msg)) dayOffset = 0;
+  else return null;
+
+  const hm = /(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i.exec(msg);
+  const h = hm ? parseInt(hm[1], 10) : 9;
+  const min = hm?.[2] ? parseInt(hm[2], 10) : 0;
+  const ampm = hm?.[3]?.toLowerCase();
+  let hour = h;
+  if (ampm === "pm" && hour < 12) hour += 12;
+  if (ampm === "am" && hour === 12) hour = 0;
+
+  const d = new Date(now);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() + dayOffset);
+  d.setHours(hour, min, 0, 0);
+  return d;
+}
+
+// ---- Agent
 
 export async function runAgent(
   conversationId: string,
@@ -179,10 +218,7 @@ export async function runAgent(
   ): Promise<ToolCallOutcome | null> => {
     if (!toolName || !(toolName in tools)) {
       emit({ event: "error", data: { message: `Tool desconocida: ${String(toolName)}` } });
-      session.history.push({
-        role: "assistant",
-        content: `TOOL_ERROR ${String(toolName)}`,
-      });
+      session.history.push({ role: "assistant", content: `TOOL_ERROR ${String(toolName)}` });
       await saveSession(session);
       return null;
     }
@@ -195,10 +231,7 @@ export async function runAgent(
     } catch (err) {
       const msg = err instanceof Error ? err.message : "input inválido";
       emit({ event: "error", data: { message: `Input inválido para ${typedName}: ${msg}` } });
-      session.history.push({
-        role: "assistant",
-        content: `TOOL_INPUT_ERROR ${typedName}: ${msg}`,
-      });
+      session.history.push({ role: "assistant", content: `TOOL_INPUT_ERROR ${typedName}: ${msg}` });
       await saveSession(session);
       return null;
     }
@@ -232,10 +265,7 @@ export async function runAgent(
 
       if (typedName === "verify_passcode" && status === "success") {
         session.authenticatedUser = (result as any)?.user;
-        emit({
-          event: "state",
-          data: { authenticatedUser: session.authenticatedUser ?? null },
-        });
+        emit({ event: "state", data: { authenticatedUser: session.authenticatedUser ?? null } });
       }
 
       await saveSession(session);
@@ -244,19 +274,9 @@ export async function runAgent(
       const msg = err instanceof Error ? err.message : "Error ejecutando tool";
       emit({
         event: "tool_result",
-        data: {
-          id: callId,
-          name: typedName,
-          input: parsedInput,
-          result: null,
-          status: "error",
-          error: msg,
-        },
+        data: { id: callId, name: typedName, input: parsedInput, result: null, status: "error", error: msg },
       });
-      session.history.push({
-        role: "assistant",
-        content: `TOOL_EXEC_ERROR ${typedName}: ${msg}`,
-      });
+      session.history.push({ role: "assistant", content: `TOOL_EXEC_ERROR ${typedName}: ${msg}` });
       await saveSession(session);
       return null;
     }
@@ -277,9 +297,7 @@ export async function runAgent(
     switch (name) {
       case "record_note": {
         const ts =
-          (result as any)?.createdAt ??
-          (result as any)?.created_at ??
-          new Date().toISOString();
+          (result as any)?.createdAt ?? (result as any)?.created_at ?? new Date().toISOString();
         const noteId =
           (result as any)?.noteId ??
           (result as any)?.id ??
@@ -289,9 +307,7 @@ export async function runAgent(
         const snippet =
           typeof noteText === "string" && noteText.trim().length
             ? ` Detalle: "${
-                noteText.trim().length > 140
-                  ? `${noteText.trim().slice(0, 137)}…`
-                  : noteText.trim()
+                noteText.trim().length > 140 ? `${noteText.trim().slice(0, 137)}…` : noteText.trim()
               }"`
             : "";
         const when = formatDateTime(ts);
@@ -387,9 +403,7 @@ export async function runAgent(
         const notes =
           typeof followUp?.notes === "string" && followUp.notes.trim().length
             ? ` Notas: "${
-                followUp.notes.trim().length > 120
-                  ? `${followUp.notes.trim().slice(0, 117)}…`
-                  : followUp.notes.trim()
+                followUp.notes.trim().length > 120 ? `${followUp.notes.trim().slice(0, 117)}…` : followUp.notes.trim()
               }".`
             : "";
         return `Follow-up agendado (ID ${followUp?.id}): "${followUp?.title}" con vencimiento ${dueText}.${notes}`;
@@ -405,9 +419,7 @@ export async function runAgent(
           const notes =
             typeof item.notes === "string" && item.notes.trim().length
               ? ` – ${
-                  item.notes.trim().length > 100
-                    ? `${item.notes.trim().slice(0, 97)}…`
-                    : item.notes.trim()
+                  item.notes.trim().length > 100 ? `${item.notes.trim().slice(0, 97)}…` : item.notes.trim()
                 }`
               : "";
           return `• [ID ${item.id}] ${item.title} (${status}, vence ${due})${notes}`;
@@ -448,7 +460,9 @@ export async function runAgent(
   }
 
   const normalized = userMessage.toLowerCase();
+
   if (session.authenticatedUser) {
+    // Listados rápidos
     const numberMatch = userMessage.match(/\b(\d{1,2})\b/);
     const limit = numberMatch ? Number(numberMatch[1]) : undefined;
 
@@ -490,6 +504,35 @@ export async function runAgent(
         return;
       }
     }
+
+    // Altas rápidas sin LLM
+
+    // Crear NOTA
+    const noteText = extractNoteText(userMessage);
+    if (noteText) {
+      const outcome = await invokeTool("record_note", { text: noteText });
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+    }
+
+    // Agendar FOLLOW-UP
+    const wantsFU = /(agend(a|á|ar)|program(a|á|ar)).*?(follow[- ]?up|seguim(i|í)ento)/i.test(
+      userMessage
+    );
+    if (wantsFU) {
+      const dueAt = parseDueAtSpanish(userMessage) || undefined;
+      const titleMatch = /(?:para|con|sobre)\s+(.+)$/i.exec(userMessage);
+      const title = stripPunct(titleMatch?.[1] ?? "Seguimiento");
+      const payload: any = { title };
+      if (dueAt) payload.dueAt = dueAt;
+      const outcome = await invokeTool("schedule_followup", payload);
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+    }
   }
 
   const maxIters = Math.min(10, Math.max(1, Number(process.env.MAX_TOOL_ITERATIONS ?? "4")));
@@ -504,14 +547,11 @@ export async function runAgent(
       content = await openrouterChat({
         system: `${BASE_PROMPT}\n\n${contextual}`,
         messages: buildMessages(session.history),
-        temperature: 0, // menor aleatoriedad para JSON estable
+        temperature: 0,
         maxTokens: 1024,
       });
     } catch (e) {
-      const plan = fallbackPlan(
-        e instanceof Error ? e.message : "LLM error",
-        Boolean(session.authenticatedUser)
-      );
+      const plan = fallbackPlan(e instanceof Error ? e.message : "LLM error", Boolean(session.authenticatedUser));
       emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
       await emitStreamingText(emit, plan.final_response ?? "");
       session.history.push({ role: "assistant", content: plan.final_response ?? "" });
@@ -519,9 +559,7 @@ export async function runAgent(
       return;
     }
 
-    const plan =
-      parsePlan(content) ??
-      fallbackPlan("Modelo devolvió JSON inválido", Boolean(session.authenticatedUser));
+    const plan = parsePlan(content) ?? fallbackPlan("Modelo devolvió JSON inválido", Boolean(session.authenticatedUser));
     emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
 
     if (plan.action === "tool") {
@@ -533,7 +571,6 @@ export async function runAgent(
       continue;
     }
 
-    // Respuesta directa
     const text = plan.final_response ?? "";
     await emitStreamingText(emit, text);
     session.history.push({ role: "assistant", content: text });

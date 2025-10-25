@@ -1,3 +1,4 @@
+// src/lib/tools.ts
 import { z } from "zod";
 import { query } from "@/lib/db";
 import { searchDocuments } from "@/lib/rag";
@@ -56,10 +57,10 @@ export const tools: ToolRegistry = {
     async execute(input) {
       const r = await query<{ id: number; name: string }>(
         `SELECT id, name
-     FROM invited_user
-    WHERE unaccent(lower(name)) = unaccent(lower($1))
-      AND passcode = $2
-    LIMIT 1`,
+           FROM invited_user
+          WHERE unaccent(lower(name)) = unaccent(lower(trim($1)))
+            AND passcode = $2
+          LIMIT 1`,
         [input.name.trim(), input.passcode.trim()]
       );
       if (r.rowCount === 0)
@@ -71,6 +72,7 @@ export const tools: ToolRegistry = {
       };
     },
   },
+
   create_lead: {
     name: "create_lead",
     description: "Crea un lead potencial.",
@@ -78,9 +80,9 @@ export const tools: ToolRegistry = {
     async execute(input, ctx) {
       if (!ctx.session.authenticatedUser)
         return { success: false, message: "No autenticado" };
-      const name = input.name.trim(),
-        email = input.email.trim(),
-        source = input.source?.trim();
+      const name = input.name.trim();
+      const email = input.email.trim();
+      const source = input.source?.trim();
       const r = await query<{ id: number; created_at: string }>(
         `INSERT INTO lead(name, email, source) VALUES ($1,$2,$3) RETURNING id, created_at`,
         [name, email, source ?? null]
@@ -98,6 +100,7 @@ export const tools: ToolRegistry = {
       };
     },
   },
+
   record_note: {
     name: "record_note",
     description: "Guarda una nota vinculada al usuario autenticado.",
@@ -119,6 +122,7 @@ export const tools: ToolRegistry = {
       };
     },
   },
+
   list_notes: {
     name: "list_notes",
     description: "Recupera notas previas del usuario autenticado.",
@@ -129,10 +133,10 @@ export const tools: ToolRegistry = {
       const limit = input.limit ?? 10;
       const r = await query<{ id: number; text: string; created_at: string }>(
         `SELECT id, text, created_at
-         FROM note
-         WHERE user_id = $1
-         ORDER BY created_at DESC
-         LIMIT $2`,
+           FROM note
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          LIMIT $2`,
         [ctx.session.authenticatedUser.id, limit]
       );
       return {
@@ -145,12 +149,11 @@ export const tools: ToolRegistry = {
         message:
           r.rowCount === 0
             ? "No se encontraron notas previas."
-            : `Se recuperaron ${r.rowCount} nota${
-                r.rowCount === 1 ? "" : "s"
-              }.`,
+            : `Se recuperaron ${r.rowCount} nota${r.rowCount === 1 ? "" : "s"}.`,
       };
     },
   },
+
   delete_note: {
     name: "delete_note",
     description: "Elimina una nota propia por ID.",
@@ -177,6 +180,7 @@ export const tools: ToolRegistry = {
       };
     },
   },
+
   list_leads: {
     name: "list_leads",
     description: "Enumera leads recientes registrados en el sistema.",
@@ -191,9 +195,9 @@ export const tools: ToolRegistry = {
         created_at: string;
       }>(
         `SELECT id, name, email, source, created_at
-         FROM lead
-         ORDER BY created_at DESC
-         LIMIT $1`,
+           FROM lead
+          ORDER BY created_at DESC
+          LIMIT $1`,
         [limit]
       );
       return {
@@ -212,6 +216,7 @@ export const tools: ToolRegistry = {
       };
     },
   },
+
   schedule_followup: {
     name: "schedule_followup",
     description: "Agenda un follow-up para el usuario autenticado.",
@@ -246,6 +251,7 @@ export const tools: ToolRegistry = {
       };
     },
   },
+
   list_followups: {
     name: "list_followups",
     description: "Enumera follow-ups del usuario autenticado.",
@@ -265,10 +271,10 @@ export const tools: ToolRegistry = {
         completed_at: string | null;
       }>(
         `SELECT id, title, due_at, notes, status, created_at, completed_at
-         FROM follow_up
-         WHERE user_id = $1 AND status = $2
-         ORDER BY COALESCE(due_at, created_at) ASC
-         LIMIT $3`,
+           FROM follow_up
+          WHERE user_id = $1 AND status = $2
+          ORDER BY COALESCE(due_at, created_at) ASC
+          LIMIT $3`,
         [ctx.session.authenticatedUser.id, status, limit]
       );
       return {
@@ -285,12 +291,11 @@ export const tools: ToolRegistry = {
         message:
           r.rowCount === 0
             ? "No hay follow-ups en ese estado."
-            : `Se listaron ${r.rowCount} follow-up${
-                r.rowCount === 1 ? "" : "s"
-              }.`,
+            : `Se listaron ${r.rowCount} follow-up${r.rowCount === 1 ? "" : "s"}.`,
       };
     },
   },
+
   complete_followup: {
     name: "complete_followup",
     description: "Marca como completado un follow-up propio.",
@@ -306,9 +311,9 @@ export const tools: ToolRegistry = {
         due_at: string | null;
       }>(
         `UPDATE follow_up
-         SET status = 'completed', completed_at = now()
-         WHERE id = $1 AND user_id = $2
-         RETURNING id, title, completed_at, due_at`,
+            SET status = 'completed', completed_at = now()
+          WHERE id = $1 AND user_id = $2
+          RETURNING id, title, completed_at, due_at`,
         [followUpId, ctx.session.authenticatedUser.id]
       );
       if (r.rowCount === 0) {
@@ -331,6 +336,7 @@ export const tools: ToolRegistry = {
       };
     },
   },
+
   search_docs: {
     name: "search_docs",
     description: "Busca en la base vectorial.",

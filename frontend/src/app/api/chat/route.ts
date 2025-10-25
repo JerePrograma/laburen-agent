@@ -1,3 +1,4 @@
+// frontend/src/app/api/chat/route.ts
 import { NextRequest } from "next/server";
 import { z } from "zod";
 
@@ -12,19 +13,14 @@ const ChatSchema = z.object({
 export async function POST(req: NextRequest) {
   const { runAgent } = await import("@/lib/agent");
 
-  const body = await req.json();
-  const { conversationId, message } = ChatSchema.safeParse(body).success
-    ? ChatSchema.parse(body)
-    : (() => {
-        return { conversationId: "", message: "" }; // dummy para tipado; se corta abajo
-      })();
-
-  // si no válido, 400
-  if (!conversationId || !message) {
+  const parsed = ChatSchema.safeParse(await req.json().catch(() => ({})));
+  if (!parsed.success) {
     return new Response(JSON.stringify({ error: "conversationId y message son obligatorios" }), {
-      status: 400, headers: { "Content-Type": "application/json" },
+      status: 400,
+      headers: { "Content-Type": "application/json" },
     });
   }
+  const { conversationId, message } = parsed.data;
 
   const enc = new TextEncoder();
   const fmt = (e: string, d: unknown) => `event: ${e}\ndata: ${JSON.stringify(d)}\n\n`;
@@ -36,11 +32,17 @@ export async function POST(req: NextRequest) {
         await runAgent(conversationId, message, (ev) => emit(ev.event, (ev as any).data));
       } catch (error) {
         emit("error", { message: error instanceof Error ? error.message : String(error) });
-      } finally { controller.close(); }
+      } finally {
+        controller.close();
+      }
     },
   });
 
   return new Response(stream, {
-    headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-transform", Connection: "keep-alive" },
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
   });
 }

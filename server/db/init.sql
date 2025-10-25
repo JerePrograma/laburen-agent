@@ -1,5 +1,6 @@
--- Extensión
+-- Extensiones
 CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS unaccent;
 
 -- Auth por chat
 CREATE TABLE IF NOT EXISTS invited_user (
@@ -19,7 +20,7 @@ CREATE TABLE IF NOT EXISTS doc_chunk (
   id SERIAL PRIMARY KEY,
   doc_id INT REFERENCES doc(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
-  embedding vector(768)  -- mantener en sync con EMBEDDING_DIM
+  embedding vector(768)
 );
 
 CREATE INDEX IF NOT EXISTS doc_chunk_embedding_hnsw
@@ -42,7 +43,7 @@ CREATE TABLE IF NOT EXISTS note (
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Seguimiento de follow-ups para demos y tareas comerciales
+-- Seguimientos
 CREATE TABLE IF NOT EXISTS follow_up (
   id SERIAL PRIMARY KEY,
   user_id INT REFERENCES invited_user(id),
@@ -61,8 +62,17 @@ CREATE INDEX IF NOT EXISTS follow_up_user_status_due_idx
 CREATE TABLE IF NOT EXISTS session (
   id TEXT PRIMARY KEY,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  authenticated_user JSONB,     -- { "id": int, "name": text } | null
+  authenticated_user JSONB,
   history JSONB NOT NULL DEFAULT '[]'::jsonb
 );
 
 CREATE INDEX IF NOT EXISTS session_created_at_idx ON session (created_at DESC);
+
+-- Seeds de usuarios de ejemplo (idempotentes por passcode único)
+INSERT INTO invited_user(name, passcode)
+VALUES ('Seba','123456')
+ON CONFLICT (passcode) DO UPDATE SET name = EXCLUDED.name;
+
+INSERT INTO invited_user(name, passcode)
+VALUES ('Jeremías','654321')
+ON CONFLICT (passcode) DO UPDATE SET name = EXCLUDED.name;

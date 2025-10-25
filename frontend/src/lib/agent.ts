@@ -168,8 +168,8 @@ function extractRecordNote(msg: string) {
   const re1 = /(registr(a|á|ar)|guard(a|á|ar)|anot(a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
   const re2 = /\bnota\b\s*[:\-]\s*([\s\S]+)$/i;
   const m = re1.exec(msg) ?? re2.exec(msg);
-  const text = m?.[3] ?? m?.[1] ?? "";
-  const cleaned = stripPunct(String(text));
+  const text = (m?.[3] ?? m?.[1] ?? "").toString();
+  const cleaned = stripPunct(text);
   return cleaned.length >= 3 ? { text: cleaned } : null;
 }
 
@@ -197,8 +197,12 @@ function extractCreateLead(text: string) {
 
 // ----- Follow-ups: completar -----
 function extractCompleteFollowUp(text: string) {
-  const m = text.match(/(?:marc(a|á)|complet(a|á)|cerr(a|á)).*?follow[- ]?up\s*#?\s*(\d+)\b/i);
-  return m ? { followUpId: Number(m[2]) } : null;
+  // Soporta “marcá/completá/cerrá el follow-up 3”
+  const m =
+    /(?:marc(a|á)|complet(a|á)|cerr(a|á)).*?follow[- ]?up\s*#?\s*(?<id>\d+)\b/i.exec(text) ||
+    /follow[- ]?up\s*#?\s*(?<id>\d+)\b.*?(?:complet(a|á)|cerr(a|á))/i.exec(text);
+  const id = m?.groups?.id ? Number(m.groups.id) : NaN;
+  return Number.isFinite(id) ? { followUpId: id } : null;
 }
 
 // ----- Búsqueda en documentación -----
@@ -270,7 +274,7 @@ function extractScheduleFollowUp(text: string) {
   return { title, dueAt: r.when };
 }
 
-// ---- Agent fast-path (previo al bucle LLM)
+// ---- Agent (fast-path + fallback LLM)
 
 export async function runAgent(
   conversationId: string,
@@ -362,19 +366,13 @@ export async function runAgent(
     const { name, parsedInput, result } = outcome;
     switch (name) {
       case "record_note": {
-        const ts =
-          (result as any)?.createdAt ?? (result as any)?.created_at ?? new Date().toISOString();
+        const ts = (result as any)?.createdAt ?? (result as any)?.created_at ?? new Date().toISOString();
         const noteId =
-          (result as any)?.noteId ??
-          (result as any)?.id ??
-          (result as any)?.note?.id ??
-          (parsedInput as any)?.noteId;
+          (result as any)?.noteId ?? (result as any)?.id ?? (result as any)?.note?.id ?? (parsedInput as any)?.noteId;
         const noteText = (result as any)?.text ?? (parsedInput as any)?.text;
         const snippet =
           typeof noteText === "string" && noteText.trim().length
-            ? ` Detalle: "${
-                noteText.trim().length > 140 ? `${noteText.trim().slice(0, 137)}…` : noteText.trim()
-              }"`
+            ? ` Detalle: "${noteText.trim().length > 140 ? `${noteText.trim().slice(0, 137)}…` : noteText.trim()}"`
             : "";
         const when = formatDateTime(ts);
         const timeText = when ? ` el ${when}` : "";
@@ -388,9 +386,7 @@ export async function runAgent(
         const email = leadResult?.email ?? leadInput?.email;
         const source = leadResult?.source ?? leadInput?.source;
         const leadId = leadResult?.id ?? (result as any)?.leadId;
-        const headline = [nameValue ? String(nameValue) : null, email ? `<${String(email)}>` : null]
-          .filter(Boolean)
-          .join(" ");
+        const headline = [nameValue ? String(nameValue) : null, email ? `<${String(email)}>` : null].filter(Boolean).join(" ");
         const meta: string[] = [];
         if (leadId) meta.push(`ID ${leadId}`);
         if (source) meta.push(`fuente: ${String(source)}`);
@@ -404,11 +400,7 @@ export async function runAgent(
       }
       case "search_docs": {
         const payload = (result as any) ?? {};
-        const matches = Array.isArray(payload.results)
-          ? payload.results
-          : Array.isArray(result)
-          ? (result as any)
-          : [];
+        const matches = Array.isArray(payload.results) ? payload.results : Array.isArray(result) ? (result as any) : [];
         const count = matches.length;
         const extras: string[] = [];
         if (matches[0]?.path) extras.push(`Ejemplo: ${matches[0].path}`);
@@ -418,9 +410,7 @@ export async function runAgent(
       }
       case "list_notes": {
         const notes = Array.isArray((result as any)?.notes) ? (result as any).notes : [];
-        if (notes.length === 0) {
-          return "No encontré notas registradas todavía. ¿Agendamos una nueva?";
-        }
+        if (notes.length === 0) return "No encontré notas registradas todavía. ¿Agendamos una nueva?";
         const lines = notes.slice(0, 10).map((note: any) => {
           const when = formatDateTime(note.createdAt);
           const snippet =
@@ -451,9 +441,7 @@ export async function runAgent(
       }
       case "list_leads": {
         const leads = Array.isArray((result as any)?.leads) ? (result as any).leads : [];
-        if (leads.length === 0) {
-          return "No hay leads registrados todavía. ¿Querés crear uno nuevo?";
-        }
+        if (leads.length === 0) return "No hay leads registrados todavía. ¿Querés crear uno nuevo?";
         const lines = leads.slice(0, 10).map((lead: any) => {
           const created = formatDateTime(lead.createdAt);
           const meta = [lead.email ? `<${lead.email}>` : null, lead.source ? `fuente: ${lead.source}` : null, created]
@@ -468,25 +456,19 @@ export async function runAgent(
         const dueText = formatDateTime(followUp?.dueAt) ?? "sin fecha definida";
         const notes =
           typeof followUp?.notes === "string" && followUp.notes.trim().length
-            ? ` Notas: "${
-                followUp.notes.trim().length > 120 ? `${followUp.notes.trim().slice(0, 117)}…` : followUp.notes.trim()
-              }".`
+            ? ` Notas: "${followUp.notes.trim().length > 120 ? `${followUp.notes.trim().slice(0, 117)}…` : followUp.notes.trim()}".`
             : "";
         return `Follow-up agendado (ID ${followUp?.id}): "${followUp?.title}" con vencimiento ${dueText}.${notes}`;
       }
       case "list_followups": {
         const followUps = Array.isArray((result as any)?.followUps) ? (result as any).followUps : [];
-        if (followUps.length === 0) {
-          return "No hay follow-ups en ese estado por ahora. Podemos agendar uno nuevo si querés.";
-        }
+        if (followUps.length === 0) return "No hay follow-ups en ese estado por ahora. Podemos agendar uno nuevo si querés.";
         const lines = followUps.slice(0, 10).map((item: any) => {
           const due = formatDateTime(item.dueAt) ?? "sin fecha";
           const status = item.status === "completed" ? "completado" : "pendiente";
           const notes =
             typeof item.notes === "string" && item.notes.trim().length
-              ? ` – ${
-                  item.notes.trim().length > 100 ? `${item.notes.trim().slice(0, 97)}…` : item.notes.trim()
-                }`
+              ? ` – ${item.notes.trim().length > 100 ? `${item.notes.trim().slice(0, 97)}…` : item.notes.trim()}`
               : "";
           return `• [ID ${item.id}] ${item.title} (${status}, vence ${due})${notes}`;
         });
@@ -529,39 +511,34 @@ export async function runAgent(
     if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
   }
 
-  // 3) Acciones y listados (solo si autenticado)
+  // 3) Acciones y listados (si autenticado)
   if (session.authenticatedUser) {
-    // 3.a) Acciones explícitas primero
-
-    // Completar follow-up
+    // Acciones explícitas primero
     const done = extractCompleteFollowUp(userMessage);
     if (done) {
       const outcome = await invokeTool("complete_followup", done);
       if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    // Agendar follow-up
     const sched = extractScheduleFollowUp(userMessage);
     if (sched) {
       const outcome = await invokeTool("schedule_followup", sched);
       if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    // Crear lead
     const lead = extractCreateLead(userMessage);
     if (lead) {
       const outcome = await invokeTool("create_lead", lead);
       if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    // Registrar nota
     const note = extractRecordNote(userMessage);
     if (note) {
       const outcome = await invokeTool("record_note", note);
       if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
     }
 
-    // 3.b) Listados
+    // Listados
     const normalized = userMessage.toLowerCase();
     const numberMatch = userMessage.match(/\b(\d{1,2})\b/);
     const limit = numberMatch ? Number(numberMatch[1]) : undefined;
@@ -587,7 +564,47 @@ export async function runAgent(
     }
   }
 
+  // 4) Bucle LLM de tu implementación actual
   const maxIters = Math.min(10, Math.max(1, Number(process.env.MAX_TOOL_ITERATIONS ?? "4")));
+  for (let i = 0; i < maxIters; i++) {
+    const contextual = session.authenticatedUser
+      ? `Usuario autenticado: ${session.authenticatedUser.id} - ${session.authenticatedUser.name}.`
+      : "El usuario no está autenticado. Pedí nombre y passcode y validá con verify_passcode.";
+
+    let content = "";
+    try {
+      content = await openrouterChat({
+        system: `${BASE_PROMPT}\n\n${contextual}`,
+        messages: buildMessages(session.history),
+        temperature: 0,
+        maxTokens: 1024,
+      });
+    } catch (e) {
+      const plan = fallbackPlan(e instanceof Error ? e.message : "LLM error", Boolean(session.authenticatedUser));
+      emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
+      await emitStreamingText(emit, plan.final_response ?? "");
+      session.history.push({ role: "assistant", content: plan.final_response ?? "" });
+      await saveSession(session);
+      return;
+    }
+
+    const plan = parsePlan(content) ?? fallbackPlan("Modelo devolvió JSON inválido", Boolean(session.authenticatedUser));
+    emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
+
+    if (plan.action === "tool") {
+      const outcome = await invokeTool(plan.tool?.name, plan.tool?.input);
+      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      continue;
+    }
+
+    const text = plan.final_response ?? "";
+    await emitStreamingText(emit, text);
+    session.history.push({ role: "assistant", content: text });
+    await saveSession(session);
+    return;
+  }
+
+  emit({ event: "error", data: { message: "El agente alcanzó el límite de iteraciones sin responder." } });
 
   for (let i = 0; i < maxIters; i++) {
     const contextual = session.authenticatedUser

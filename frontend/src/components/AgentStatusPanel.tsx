@@ -52,7 +52,6 @@ const KEYWORD_GUIDE: Array<{
 function KeywordGuide() {
   return (
     <div className="keyword-guide">
-      <span className="small-label">Guía de palabras clave</span>
       <div className="keyword-guide-grid">
         {KEYWORD_GUIDE.map((entry) => (
           <article key={entry.category} className="keyword-card">
@@ -357,8 +356,11 @@ export function AgentStatusPanel({
         <div className="status-error">⚠️ {lastError}</div>
       ) : null}
 
-      <div className="quick-actions">
-        <span className="small-label">Ideas para probar</span>
+      <details className="panel-section" open>
+        <summary>
+          <span>Ideas para probar</span>
+          <span className="badge neutral">{suggestions.length}</span>
+        </summary>
         <div className="quick-actions-grid">
           {suggestions.map((suggestion) => (
             <button
@@ -371,9 +373,14 @@ export function AgentStatusPanel({
             </button>
           ))}
         </div>
-      </div>
+      </details>
 
-      <KeywordGuide />
+      <details className="panel-section">
+        <summary>
+          <span>Guía de palabras clave</span>
+        </summary>
+        <KeywordGuide />
+      </details>
     </section>
   );
 }

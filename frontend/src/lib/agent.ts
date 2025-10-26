@@ -185,6 +185,21 @@ function extractRecordNote(msg: string) {
   return cleaned.length >= 3 ? { text: cleaned } : null;
 }
 
+function extractDeleteNote(msg: string) {
+  const patterns = [
+    /(?:elimin(?:a|á)|borr(?:a|á)|quit(?:a|á)).*?nota\s*#?\s*(\d+)/i,
+    /nota\s*#?\s*(\d+).*?(?:elimin(?:a|á)|borr(?:a|á)|quit(?:a|á))/i,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(msg);
+    if (match) {
+      const id = Number(match[1]);
+      if (Number.isFinite(id) && id > 0) return { noteId: id };
+    }
+  }
+  return null;
+}
+
 // ----- Leads -----
 const emailRe = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i;
 function extractCreateLead(text: string) {
@@ -240,16 +255,21 @@ function extractSearchDocs(text: string) {
   );
 
   const hasDocsWords =
-    /\b(documentación|manual|guía|onboarding|prácticas)\b/.test(t);
+    /\b(documentación|documentos|manual|guía|onboarding|prácticas)\b/.test(t);
   const explicitSearch = /^\s*busc(a|á|ar)\b/.test(t);
+  const hasKnowledgeKeywords =
+    /\b(embedding|embeddings|vector|rag|modelo|stack|arquitectura|pipeline|contexto)\b/.test(
+      t
+    );
 
   if (
     (hasQuestionPunct || hasInterrogatives) &&
-    (hasDocsWords || explicitSearch)
+    (hasDocsWords || explicitSearch || hasKnowledgeKeywords)
   ) {
     return { question: stripPunct(text) };
   }
-  if (explicitSearch && hasDocsWords) return { question: stripPunct(text) };
+  if (explicitSearch && (hasDocsWords || hasKnowledgeKeywords))
+    return { question: stripPunct(text) };
   return null;
 }
 
@@ -699,6 +719,19 @@ export async function runAgent(
     const note = extractRecordNote(userMessage);
     if (note) {
       const outcome = await invokeTool("record_note", note);
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
+    }
+
+    const noteDeletion = extractDeleteNote(userMessage);
+    if (noteDeletion) {
+      const outcome = await invokeTool("delete_note", noteDeletion);
       if (outcome?.status === "success") {
         await respondWithToolSuccess(outcome);
         return;

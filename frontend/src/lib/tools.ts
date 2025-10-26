@@ -2,6 +2,7 @@
 import { z } from "zod";
 import { query } from "@/lib/db";
 import { searchDocuments } from "@/lib/rag";
+import { fallbackDocSearch } from "@/lib/static-docs";
 import type { AgentSession } from "@/lib/session-store";
 
 export interface ToolExecutionContext {
@@ -343,7 +344,33 @@ export const tools: ToolRegistry = {
     schema: searchSchema,
     async execute(input) {
       const results = await searchDocuments(input.question);
-      return { success: true, question: input.question, results };
+      if (results.length > 0) {
+        return {
+          success: true,
+          question: input.question,
+          results,
+          source: "vector" as const,
+        };
+      }
+
+      const fallback = fallbackDocSearch(input.question);
+      if (fallback.length > 0) {
+        return {
+          success: true,
+          question: input.question,
+          results: fallback,
+          source: "static" as const,
+        };
+      }
+
+      return {
+        success: true,
+        question: input.question,
+        results: [],
+        source: "none" as const,
+        message:
+          "No encontré material relacionado en la documentación cargada.",
+      };
     },
   },
 };

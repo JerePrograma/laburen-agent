@@ -525,9 +525,21 @@ export async function runAgent(
           : [];
         const count = matches.length;
         const extras: string[] = [];
-        if (matches[0]?.path) extras.push(`Ejemplo: ${matches[0].path}`);
         if (payload.question)
           extras.push(`Consulta: "${String(payload.question)}"`);
+        if (matches[0]?.path) extras.push(`Ejemplo: ${matches[0].path}`);
+        if (payload.source === "static")
+          extras.push("Fuente: compendio interno");
+        if (count === 0) {
+          const baseMessage =
+            payload.message ??
+            "No encontré fragmentos relevantes en la documentación.";
+          const hint =
+            payload.source === "none"
+              ? " Si tenés más contexto, compartilo y vuelvo a buscar."
+              : "";
+          return `${baseMessage}${hint}`;
+        }
         const extraText = extras.length ? ` ${extras.join(" • ")}` : "";
         return `Encontré ${count} fragmento${
           count === 1 ? "" : "s"

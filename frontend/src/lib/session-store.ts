@@ -1,3 +1,4 @@
+// src/lib/session-store.ts
 import { query, queryOne } from "@/lib/db";
 import type { AgentMessage } from "@/lib/types";
 
@@ -8,12 +9,16 @@ export interface AgentSession {
   authenticatedUser?: { id: number; name: string } | null;
 }
 
+function clampHistory(history: AgentMessage[], max = 120) {
+  return history.length > max ? history.slice(history.length - max) : history;
+}
+
 function serialize(session: AgentSession) {
   return {
     id: session.id,
     created_at: session.createdAt.toISOString(),
     authenticated_user: session.authenticatedUser ?? null,
-    history: session.history,
+    history: clampHistory(session.history),
   };
 }
 
@@ -24,36 +29,45 @@ export async function getSession(id: string): Promise<AgentSession> {
     authenticated_user: any | null;
     history: any;
   }>(
-    `SELECT id, created_at, authenticated_user, history
-     FROM session WHERE id = $1`,
+    // UPSERT atómico + lectura en una sola query
+    `
+    WITH upsert AS (
+      INSERT INTO session (id)
+      VALUES ($1)
+      ON CONFLICT (id) DO NOTHING
+      RETURNING id, created_at, authenticated_user, history
+    )
+    SELECT id, created_at, authenticated_user, history FROM upsert
+    UNION ALL
+    SELECT id, created_at, authenticated_user, history
+      FROM session
+     WHERE id = $1
+    LIMIT 1
+    `,
     [id]
   );
 
-  if (row) {
-    return {
-      id: row.id,
-      createdAt: new Date(row.created_at),
-      authenticatedUser: row.authenticated_user ?? null,
-      history: Array.isArray(row.history) ? row.history : [],
-    };
-  }
+  const hist =
+    Array.isArray(row?.history) ? row!.history
+    : typeof row?.history === "string" ? JSON.parse(row!.history as unknown as string)
+    : [];
 
-  // create
-  await query(
-    `INSERT INTO session(id, authenticated_user, history)
-     VALUES ($1, $2::jsonb, $3::jsonb)`,
-    [id, null, JSON.stringify([])]
-  );
-  return { id, createdAt: new Date(), history: [], authenticatedUser: null };
+  return {
+    id: row!.id,
+    createdAt: new Date(row!.created_at),
+    authenticatedUser: row!.authenticated_user ?? null,
+    history: hist,
+  };
 }
 
 export async function saveSession(session: AgentSession): Promise<void> {
   const s = serialize(session);
   await query(
     `UPDATE session
-       SET authenticated_user = $2::jsonb,
-           history = $3::jsonb
-     WHERE id = $1`,
+        SET authenticated_user = $2::jsonb,
+            history = $3::jsonb,
+            updated_at = now()
+      WHERE id = $1`,
     [s.id, JSON.stringify(s.authenticated_user), JSON.stringify(s.history)]
   );
 }

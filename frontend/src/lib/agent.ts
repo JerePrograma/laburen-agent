@@ -9,22 +9,30 @@ type ToolName = keyof typeof tools;
 import type { AgentMessage } from "@/lib/types";
 import { openrouterChat } from "@/lib/openrouter";
 
-interface AgentJSONPlan {
-  thought: string;
-  action: "tool" | "respond";
-  tool?: { name: ToolName; input?: unknown } | null;
-  final_response?: string | null;
-  confidence?: "low" | "medium" | "high";
-}
+type Plan = z.infer<typeof PlanSchema>;
+export type AgentJSONPlan = Plan;
 
 export type AgentEvent =
   | { event: "thought"; data: { id: string; text: string } }
   | { event: "tool"; data: { id: string; name: string; input: unknown } }
-  | { event: "tool_result"; data: { id: string; name: string; input: unknown; result: unknown; status: "success" | "error"; error?: string } }
+  | {
+      event: "tool_result";
+      data: {
+        id: string;
+        name: string;
+        input: unknown;
+        result: unknown;
+        status: "success" | "error";
+        error?: string;
+      };
+    }
   | { event: "assistant_message"; data: { id: string } }
   | { event: "assistant_done"; data: { id: string } }
   | { event: "token"; data: { id: string; value: string } }
-  | { event: "state"; data: { authenticatedUser?: { id: number; name: string } | null } }
+  | {
+      event: "state";
+      data: { authenticatedUser?: { id: number; name: string } | null };
+    }
   | { event: "error"; data: { message: string } };
 
 export type AgentEventEmitter = (event: AgentEvent) => void;
@@ -95,16 +103,17 @@ function chunkResponse(text: string) {
   return chunks.length ? chunks : [text];
 }
 
-function parsePlan(raw: string) {
-  const tryParse = (s: string) => {
+function parsePlan(raw: string): Plan | null {
+  const tryParse = (s: string): Plan | null => {
     try {
-      return PlanSchema.parse(JSON.parse(s));
+      return PlanSchema.parse(JSON.parse(s)) as Plan;
     } catch {
       return null;
     }
   };
   let p = tryParse(raw);
   if (p) return p;
+
   const a = raw.indexOf("{"),
     b = raw.lastIndexOf("}");
   if (a >= 0 && b > a) {
@@ -119,14 +128,14 @@ function parsePlan(raw: string) {
   }
 }
 
-function fallbackPlan(reason: string, authenticated: boolean): AgentJSONPlan {
+function fallbackPlan(reason: string, authenticated: boolean): Plan {
   return {
     thought: `Fallback: ${reason}`,
     action: "respond",
-    tool: null,
     final_response: authenticated
       ? "Hubo un problema al interpretar la respuesta del asistente. Podés intentar de nuevo."
       : "Acceso por invitación con passcode. ¿Querés registrar un lead, una nota o buscar en la documentación?",
+    tool: null,
     confidence: "low",
   };
 }
@@ -150,9 +159,13 @@ const stripPunct = (s: string) =>
     .replace(/\s+/g, " ")
     .trim();
 
-function extractPasscodeIntent(text: string): { name: string; passcode: string } | null {
-  const nameRe = /\b(?:soy|me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ' -]{1,60}?)(?=[,.;:!?)]|\s|$)/i;
-  const passRe = /\b(?:passcode|c(?:ó|o)digo|clave)\s*(?:es|:)?\s*([A-Za-z0-9-]{3,64})\b/i;
+function extractPasscodeIntent(
+  text: string
+): { name: string; passcode: string } | null {
+  const nameRe =
+    /\b(?:soy|me llamo|mi nombre es)\s+([A-Za-zÁÉÍÓÚÑáéíóúñ' -]{1,60}?)(?=[,.;:!?)]|\s|$)/i;
+  const passRe =
+    /\b(?:passcode|c(?:ó|o)digo|clave)\s*(?:es|:)?\s*([A-Za-z0-9-]{3,64})\b/i;
   const nameMatch = nameRe.exec(text);
   const passMatch = passRe.exec(text);
   if (!nameMatch || !passMatch) return null;
@@ -165,7 +178,8 @@ function extractPasscodeIntent(text: string): { name: string; passcode: string }
 // ----- Notas -----
 function extractRecordNote(msg: string) {
   // “Registrá/Guardá/Anotá … nota … <texto>” o “nota: …”
-  const re1 = /(?:registr(?:a|á|ar)|guard(?:a|á|ar)|anot(?:a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
+  const re1 =
+    /(?:registr(?:a|á|ar)|guard(?:a|á|ar)|anot(?:a|á|ar)).*?\bnota\b[:\s,.-]*([\s\S]+)$/i;
   const re2 = /\bnota\b\s*[:\-]\s*([\s\S]+)$/i;
   const m = re1.exec(msg) ?? re2.exec(msg);
   const text = (m?.[1] ?? "").toString();
@@ -184,23 +198,36 @@ function extractCreateLead(text: string) {
     const name = stripPunct(m[1]);
     const email = (m[2].match(emailRe)?.[1] ?? m[2]).trim();
     const source = stripPunct(m[3] ?? "");
-    if (name && emailRe.test(email)) return { name, email, ...(source ? { source } : {}) };
+    if (name && emailRe.test(email))
+      return { name, email, ...(source ? { source } : {}) };
   }
   // fallback: "<nombre> <email> [desde <source>]"
   const e = text.match(emailRe)?.[1];
   if (!e) return null;
-  const before = text.slice(0, text.indexOf(e)).replace(/.*para\s+/i, "").trim();
-  const src = text.slice(text.indexOf(e) + e.length).match(/(?:desde|de)\s+(.+?)$/i)?.[1]?.trim();
+  const before = text
+    .slice(0, text.indexOf(e))
+    .replace(/.*para\s+/i, "")
+    .trim();
+  const src = text
+    .slice(text.indexOf(e) + e.length)
+    .match(/(?:desde|de)\s+(.+?)$/i)?.[1]
+    ?.trim();
   const name = stripPunct(before);
-  return name && emailRe.test(e) ? { name, email: e, ...(src ? { source: stripPunct(src) } : {}) } : null;
+  return name && emailRe.test(e)
+    ? { name, email: e, ...(src ? { source: stripPunct(src) } : {}) }
+    : null;
 }
 
 // ----- Follow-ups: completar -----
 function extractCompleteFollowUp(text: string) {
   // Soporta “marcá/completá/cerrá el follow-up 3”
   const m =
-    /(?:marc(a|á)|complet(a|á)|cerr(a|á)).*?follow[- ]?up\s*#?\s*(?<id>\d+)\b/i.exec(text) ||
-    /follow[- ]?up\s*#?\s*(?<id>\d+)\b.*?(?:complet(a|á)|cerr(a|á))/i.exec(text);
+    /(?:marc(a|á)|complet(a|á)|cerr(a|á)).*?follow[- ]?up\s*#?\s*(?<id>\d+)\b/i.exec(
+      text
+    ) ||
+    /follow[- ]?up\s*#?\s*(?<id>\d+)\b.*?(?:complet(a|á)|cerr(a|á))/i.exec(
+      text
+    );
   const id = m?.groups?.id ? Number(m.groups.id) : NaN;
   return Number.isFinite(id) ? { followUpId: id } : null;
 }
@@ -208,26 +235,39 @@ function extractCompleteFollowUp(text: string) {
 // ----- Búsqueda en documentación -----
 function extractSearchDocs(text: string) {
   const t = text.toLowerCase();
-  const isQuestion =
-    /[¿?]/.test(t) ||
-    /\b(c[oó]mo|qu[ée]|d[oó]nde|cu[aá]ndo|por qu[ée]|para qu[ée])\b/.test(t);
-  const hasDocsWords = /\b(documentaci[oó]n|manual|gu[ií]a|pr[aá]cticas|onboarding)\b/.test(t);
-  const hasTechWords = /\b(crm|integraci[oó]n|api|webhook|pipeline|postgres|ollama|embedding|embeddings?)\b/.test(t);
+
+  const hasQuestionPunct = /[¿?]/.test(t);
+  const hasInterrogatives = /\b(cómo|qué|dónde|cuándo|por qué|para qué)\b/.test(
+    t
+  );
+
+  const hasDocsWords =
+    /\b(documentación|manual|guía|onboarding|prácticas)\b/.test(t);
   const explicitSearch = /^\s*busc(a|á|ar)\b/.test(t);
-  if (isQuestion || hasDocsWords || hasTechWords || explicitSearch) {
+
+  if (
+    (hasQuestionPunct || hasInterrogatives) &&
+    (hasDocsWords || explicitSearch)
+  ) {
     return { question: stripPunct(text) };
   }
+  if (explicitSearch && hasDocsWords) return { question: stripPunct(text) };
   return null;
 }
 
 // ----- Follow-ups: agendar con fechas en ES -----
-function parseDueAtSpanish(msg: string): { when: Date; matched: string } | null {
+function parseDueAtSpanish(
+  msg: string
+): { when: Date; matched: string } | null {
   const now = new Date();
   const base = new Date(now);
   base.setHours(0, 0, 0, 0);
 
   // mañana / hoy / pasado mañana a las HH[:MM] [am|pm]
-  const rel = /(pasado\s+ma[ñn]ana|ma[ñn]ana|hoy)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(msg);
+  const rel =
+    /(pasado\s+ma[ñn]ana|ma[ñn]ana|hoy)\s*(?:a\s+las\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i.exec(
+      msg
+    );
   if (rel) {
     const word = rel[1].toLowerCase();
     const hh = Number(rel[2]);
@@ -244,7 +284,9 @@ function parseDueAtSpanish(msg: string): { when: Date; matched: string } | null 
   }
 
   // dd/mm a las HH[:MM]
-  const abs = /(\d{1,2})\/(\d{1,2}).*?a\s+las\s+(\d{1,2})(?::(\d{2}))?/i.exec(msg);
+  const abs = /(\d{1,2})\/(\d{1,2}).*?a\s+las\s+(\d{1,2})(?::(\d{2}))?/i.exec(
+    msg
+  );
   if (abs) {
     const day = Number(abs[1]);
     const mon = Number(abs[2]) - 1;
@@ -267,7 +309,10 @@ function extractScheduleFollowUp(text: string) {
   let title = raw
     .replace(/agend(a|á|ar)\s+un?\s+follow[- ]?up/gi, "")
     .replace(/program(a|á|ar)\s+un?\s+follow[- ]?up/gi, "")
-    .replace(new RegExp(r.matched.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"), "")
+    .replace(
+      new RegExp(r.matched.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
+      ""
+    )
     .replace(/\b(para|con|sobre)\b/gi, "")
     .trim();
   if (!title || title.length < 3) title = "Follow-up";
@@ -297,8 +342,14 @@ export async function runAgent(
     rawInput: unknown
   ): Promise<ToolCallOutcome | null> => {
     if (!toolName || !(toolName in tools)) {
-      emit({ event: "error", data: { message: `Tool desconocida: ${String(toolName)}` } });
-      session.history.push({ role: "assistant", content: `TOOL_ERROR ${String(toolName)}` });
+      emit({
+        event: "error",
+        data: { message: `Tool desconocida: ${String(toolName)}` },
+      });
+      session.history.push({
+        role: "assistant",
+        content: `TOOL_ERROR ${String(toolName)}`,
+      });
       await saveSession(session);
       return null;
     }
@@ -309,14 +360,23 @@ export async function runAgent(
       parsedInput = def.schema.parse(rawInput ?? {});
     } catch (err) {
       const msg = err instanceof Error ? err.message : "input inválido";
-      emit({ event: "error", data: { message: `Input inválido para ${typedName}: ${msg}` } });
-      session.history.push({ role: "assistant", content: `TOOL_INPUT_ERROR ${typedName}: ${msg}` });
+      emit({
+        event: "error",
+        data: { message: `Input inválido para ${typedName}: ${msg}` },
+      });
+      session.history.push({
+        role: "assistant",
+        content: `TOOL_INPUT_ERROR ${typedName}: ${msg}`,
+      });
       await saveSession(session);
       return null;
     }
 
     const callId = randomUUID();
-    emit({ event: "tool", data: { id: callId, name: typedName, input: parsedInput } });
+    emit({
+      event: "tool",
+      data: { id: callId, name: typedName, input: parsedInput },
+    });
 
     try {
       const result = await def.execute(parsedInput, { session });
@@ -329,16 +389,28 @@ export async function runAgent(
           input: parsedInput,
           result,
           status,
-          error: status === "error" ? (result as any)?.message ?? "Error desconocido" : undefined,
+          error:
+            status === "error"
+              ? (result as any)?.message ?? "Error desconocido"
+              : undefined,
         },
       });
 
-      session.history.push({ role: "assistant", content: `TOOL_CALL ${typedName}: ${JSON.stringify(parsedInput)}` });
-      session.history.push({ role: "assistant", content: `TOOL_RESULT ${typedName}: ${JSON.stringify(result)}` });
+      session.history.push({
+        role: "assistant",
+        content: `TOOL_CALL ${typedName}: ${JSON.stringify(parsedInput)}`,
+      });
+      session.history.push({
+        role: "assistant",
+        content: `TOOL_RESULT ${typedName}: ${JSON.stringify(result)}`,
+      });
 
       if (typedName === "verify_passcode" && status === "success") {
         session.authenticatedUser = (result as any)?.user;
-        emit({ event: "state", data: { authenticatedUser: session.authenticatedUser ?? null } });
+        emit({
+          event: "state",
+          data: { authenticatedUser: session.authenticatedUser ?? null },
+        });
       }
 
       await saveSession(session);
@@ -347,9 +419,19 @@ export async function runAgent(
       const msg = err instanceof Error ? err.message : "Error ejecutando tool";
       emit({
         event: "tool_result",
-        data: { id: callId, name: typedName, input: parsedInput, result: null, status: "error", error: msg },
+        data: {
+          id: callId,
+          name: typedName,
+          input: parsedInput,
+          result: null,
+          status: "error",
+          error: msg,
+        },
       });
-      session.history.push({ role: "assistant", content: `TOOL_EXEC_ERROR ${typedName}: ${msg}` });
+      session.history.push({
+        role: "assistant",
+        content: `TOOL_EXEC_ERROR ${typedName}: ${msg}`,
+      });
       await saveSession(session);
       return null;
     }
@@ -357,7 +439,10 @@ export async function runAgent(
 
   const formatDateTime = (value: unknown) => {
     if (!value) return null;
-    const date = value instanceof Date ? value : new Date(typeof value === "number" ? value : String(value));
+    const date =
+      value instanceof Date
+        ? value
+        : new Date(typeof value === "number" ? value : String(value));
     if (Number.isNaN(date.valueOf())) return null;
     return date.toLocaleString();
   };
@@ -366,13 +451,23 @@ export async function runAgent(
     const { name, parsedInput, result } = outcome;
     switch (name) {
       case "record_note": {
-        const ts = (result as any)?.createdAt ?? (result as any)?.created_at ?? new Date().toISOString();
+        const ts =
+          (result as any)?.createdAt ??
+          (result as any)?.created_at ??
+          new Date().toISOString();
         const noteId =
-          (result as any)?.noteId ?? (result as any)?.id ?? (result as any)?.note?.id ?? (parsedInput as any)?.noteId;
+          (result as any)?.noteId ??
+          (result as any)?.id ??
+          (result as any)?.note?.id ??
+          (parsedInput as any)?.noteId;
         const noteText = (result as any)?.text ?? (parsedInput as any)?.text;
         const snippet =
           typeof noteText === "string" && noteText.trim().length
-            ? ` Detalle: "${noteText.trim().length > 140 ? `${noteText.trim().slice(0, 137)}…` : noteText.trim()}"`
+            ? ` Detalle: "${
+                noteText.trim().length > 140
+                  ? `${noteText.trim().slice(0, 137)}…`
+                  : noteText.trim()
+              }"`
             : "";
         const when = formatDateTime(ts);
         const timeText = when ? ` el ${when}` : "";
@@ -386,7 +481,12 @@ export async function runAgent(
         const email = leadResult?.email ?? leadInput?.email;
         const source = leadResult?.source ?? leadInput?.source;
         const leadId = leadResult?.id ?? (result as any)?.leadId;
-        const headline = [nameValue ? String(nameValue) : null, email ? `<${String(email)}>` : null].filter(Boolean).join(" ");
+        const headline = [
+          nameValue ? String(nameValue) : null,
+          email ? `<${String(email)}>` : null,
+        ]
+          .filter(Boolean)
+          .join(" ");
         const meta: string[] = [];
         if (leadId) meta.push(`ID ${leadId}`);
         if (source) meta.push(`fuente: ${String(source)}`);
@@ -400,17 +500,27 @@ export async function runAgent(
       }
       case "search_docs": {
         const payload = (result as any) ?? {};
-        const matches = Array.isArray(payload.results) ? payload.results : Array.isArray(result) ? (result as any) : [];
+        const matches = Array.isArray(payload.results)
+          ? payload.results
+          : Array.isArray(result)
+          ? (result as any)
+          : [];
         const count = matches.length;
         const extras: string[] = [];
         if (matches[0]?.path) extras.push(`Ejemplo: ${matches[0].path}`);
-        if (payload.question) extras.push(`Consulta: "${String(payload.question)}"`);
+        if (payload.question)
+          extras.push(`Consulta: "${String(payload.question)}"`);
         const extraText = extras.length ? ` ${extras.join(" • ")}` : "";
-        return `Encontré ${count} fragmento${count === 1 ? "" : "s"} relevantes.${extraText} ¿Querés que elabore una respuesta con ellos?`;
+        return `Encontré ${count} fragmento${
+          count === 1 ? "" : "s"
+        } relevantes.${extraText} ¿Querés que elabore una respuesta con ellos?`;
       }
       case "list_notes": {
-        const notes = Array.isArray((result as any)?.notes) ? (result as any).notes : [];
-        if (notes.length === 0) return "No encontré notas registradas todavía. ¿Agendamos una nueva?";
+        const notes = Array.isArray((result as any)?.notes)
+          ? (result as any).notes
+          : [];
+        if (notes.length === 0)
+          return "No encontré notas registradas todavía. ¿Agendamos una nueva?";
         const lines = notes.slice(0, 10).map((note: any) => {
           const when = formatDateTime(note.createdAt);
           const snippet =
@@ -420,9 +530,13 @@ export async function runAgent(
                 : note.text.trim()
               : "";
           const meta = [when ? when : null].filter(Boolean).join(" • ");
-          return `• [#${note.id}] ${snippet || "(sin detalle)"}${meta ? ` • ${meta}` : ""}`;
+          return `• [#${note.id}] ${snippet || "(sin detalle)"}${
+            meta ? ` • ${meta}` : ""
+          }`;
         });
-        return `Estas son tus últimas notas (${notes.length}):\n${lines.join("\n")}`;
+        return `Estas son tus últimas notas (${notes.length}):\n${lines.join(
+          "\n"
+        )}`;
       }
       case "delete_note": {
         const deleted = (result as any)?.deleted ?? {};
@@ -440,14 +554,23 @@ export async function runAgent(
         return pieces.join(" ");
       }
       case "list_leads": {
-        const leads = Array.isArray((result as any)?.leads) ? (result as any).leads : [];
-        if (leads.length === 0) return "No hay leads registrados todavía. ¿Querés crear uno nuevo?";
+        const leads = Array.isArray((result as any)?.leads)
+          ? (result as any).leads
+          : [];
+        if (leads.length === 0)
+          return "No hay leads registrados todavía. ¿Querés crear uno nuevo?";
         const lines = leads.slice(0, 10).map((lead: any) => {
           const created = formatDateTime(lead.createdAt);
-          const meta = [lead.email ? `<${lead.email}>` : null, lead.source ? `fuente: ${lead.source}` : null, created]
+          const meta = [
+            lead.email ? `<${lead.email}>` : null,
+            lead.source ? `fuente: ${lead.source}` : null,
+            created,
+          ]
             .filter(Boolean)
             .join(" • ");
-          return `• [ID ${lead.id}] ${lead.name ?? "Sin nombre"}${meta ? ` • ${meta}` : ""}`;
+          return `• [ID ${lead.id}] ${lead.name ?? "Sin nombre"}${
+            meta ? ` • ${meta}` : ""
+          }`;
         });
         return `Últimos leads (${leads.length}):\n${lines.join("\n")}`;
       }
@@ -456,23 +579,37 @@ export async function runAgent(
         const dueText = formatDateTime(followUp?.dueAt) ?? "sin fecha definida";
         const notes =
           typeof followUp?.notes === "string" && followUp.notes.trim().length
-            ? ` Notas: "${followUp.notes.trim().length > 120 ? `${followUp.notes.trim().slice(0, 117)}…` : followUp.notes.trim()}".`
+            ? ` Notas: "${
+                followUp.notes.trim().length > 120
+                  ? `${followUp.notes.trim().slice(0, 117)}…`
+                  : followUp.notes.trim()
+              }".`
             : "";
         return `Follow-up agendado (ID ${followUp?.id}): "${followUp?.title}" con vencimiento ${dueText}.${notes}`;
       }
       case "list_followups": {
-        const followUps = Array.isArray((result as any)?.followUps) ? (result as any).followUps : [];
-        if (followUps.length === 0) return "No hay follow-ups en ese estado por ahora. Podemos agendar uno nuevo si querés.";
+        const followUps = Array.isArray((result as any)?.followUps)
+          ? (result as any).followUps
+          : [];
+        if (followUps.length === 0)
+          return "No hay follow-ups en ese estado por ahora. Podemos agendar uno nuevo si querés.";
         const lines = followUps.slice(0, 10).map((item: any) => {
           const due = formatDateTime(item.dueAt) ?? "sin fecha";
-          const status = item.status === "completed" ? "completado" : "pendiente";
+          const status =
+            item.status === "completed" ? "completado" : "pendiente";
           const notes =
             typeof item.notes === "string" && item.notes.trim().length
-              ? ` – ${item.notes.trim().length > 100 ? `${item.notes.trim().slice(0, 97)}…` : item.notes.trim()}`
+              ? ` – ${
+                  item.notes.trim().length > 100
+                    ? `${item.notes.trim().slice(0, 97)}…`
+                    : item.notes.trim()
+                }`
               : "";
           return `• [ID ${item.id}] ${item.title} (${status}, vence ${due})${notes}`;
         });
-        return `Resumen de follow-ups (${followUps.length}):\n${lines.join("\n")}`;
+        return `Resumen de follow-ups (${followUps.length}):\n${lines.join(
+          "\n"
+        )}`;
       }
       case "complete_followup": {
         const followUp = (result as any)?.followUp ?? result;
@@ -495,77 +632,163 @@ export async function runAgent(
     await saveSession(session);
   };
 
+  const respondWithToolError = async (outcome: ToolCallOutcome) => {
+    const msg =
+      (outcome.result as any)?.message ??
+      `No se pudo ejecutar ${outcome.name}.`;
+    await emitStreamingText(emit, msg);
+    session.history.push({ role: "assistant", content: msg });
+    await saveSession(session);
+  };
+
   // 1) Auth fast-path
   if (!session.authenticatedUser) {
     const creds = extractPasscodeIntent(userMessage);
     if (creds) {
       const outcome = await invokeTool("verify_passcode", creds);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      if (outcome) {
+        if (outcome.status === "success") {
+          await respondWithToolSuccess(outcome);
+          return;
+        }
+        await respondWithToolError(outcome);
+        return;
+      }
     }
   }
 
-  // 2) Búsqueda en docs: siempre permitida
-  const q = extractSearchDocs(userMessage);
-  if (q) {
-    const outcome = await invokeTool("search_docs", q);
-    if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
-  }
-
-  // 3) Acciones y listados (si autenticado)
+  // 2) Acciones y listados (si autenticado)
   if (session.authenticatedUser) {
-    // Acciones explícitas primero
     const done = extractCompleteFollowUp(userMessage);
     if (done) {
       const outcome = await invokeTool("complete_followup", done);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
     }
 
     const sched = extractScheduleFollowUp(userMessage);
     if (sched) {
       const outcome = await invokeTool("schedule_followup", sched);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
     }
 
     const lead = extractCreateLead(userMessage);
     if (lead) {
       const outcome = await invokeTool("create_lead", lead);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
     }
 
     const note = extractRecordNote(userMessage);
     if (note) {
       const outcome = await invokeTool("record_note", note);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
     }
 
-    // Listados
     const normalized = userMessage.toLowerCase();
     const numberMatch = userMessage.match(/\b(\d{1,2})\b/);
     const limit = numberMatch ? Number(numberMatch[1]) : undefined;
 
-    if (/nota/.test(normalized) && /(mostr|lista|listá|ver|consult)/.test(normalized)) {
+    if (
+      /nota/.test(normalized) &&
+      /(mostr|lista|listá|ver|consult)/.test(normalized)
+    ) {
       const outcome = await invokeTool("list_notes", limit ? { limit } : {});
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
     }
 
-    if (/lead/.test(normalized) && /(mostr|lista|listá|ver|consult)/.test(normalized)) {
+    if (
+      /lead/.test(normalized) &&
+      /(mostr|lista|listá|ver|consult)/.test(normalized)
+    ) {
       const outcome = await invokeTool("list_leads", limit ? { limit } : {});
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
     }
 
-    if (/(follow[- ]?up|seguimiento)/.test(normalized) && /(mostr|lista|listá|ver|consult)/.test(normalized)) {
+    if (
+      /(follow[- ]?up|seguimiento)/.test(normalized) &&
+      /(mostr|lista|listá|ver|consult)/.test(normalized)
+    ) {
       const status = /\bpendient/.test(normalized)
         ? "pending"
         : /\bcompletad|completos?\b/.test(normalized)
         ? "completed"
         : undefined;
-      const outcome = await invokeTool("list_followups", { ...(status ? { status } : {}), ...(limit ? { limit } : {}) });
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
+      const outcome = await invokeTool("list_followups", {
+        ...(status ? { status } : {}),
+        ...(limit ? { limit } : {}),
+      });
+      if (outcome?.status === "success") {
+        await respondWithToolSuccess(outcome);
+        return;
+      }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
     }
   }
 
-  // 4) Bucle LLM de tu implementación actual
-  const maxIters = Math.min(10, Math.max(1, Number(process.env.MAX_TOOL_ITERATIONS ?? "4")));
+  // 3) Búsqueda en docs (al final)
+  const q = extractSearchDocs(userMessage);
+  if (q) {
+    const outcome = await invokeTool("search_docs", q);
+    if (outcome?.status === "success") {
+      await respondWithToolSuccess(outcome);
+      return;
+    }
+    if (outcome) {
+      await respondWithToolError(outcome);
+      return;
+    }
+  }
+
+  // 4) LLM loop único con retry JSON
+  // antes del loop
+  const maxIters = Math.min(
+    10,
+    Math.max(1, Number(process.env.MAX_TOOL_ITERATIONS ?? "4"))
+  );
   for (let i = 0; i < maxIters; i++) {
     const contextual = session.authenticatedUser
       ? `Usuario autenticado: ${session.authenticatedUser.id} - ${session.authenticatedUser.name}.`
@@ -580,55 +803,37 @@ export async function runAgent(
         maxTokens: 1024,
       });
     } catch (e) {
-      const plan = fallbackPlan(e instanceof Error ? e.message : "LLM error", Boolean(session.authenticatedUser));
-      emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
-      await emitStreamingText(emit, plan.final_response ?? "");
-      session.history.push({ role: "assistant", content: plan.final_response ?? "" });
+      const plan = fallbackPlan(
+        e instanceof Error ? e.message : "LLM error",
+        Boolean(session.authenticatedUser)
+      );
+      emit({
+        event: "thought",
+        data: { id: randomUUID(), text: plan.thought },
+      });
+      await emitStreamingText(emit, plan.final_response);
+      session.history.push({ role: "assistant", content: plan.final_response });
       await saveSession(session);
       return;
     }
 
-    const plan = parsePlan(content) ?? fallbackPlan("Modelo devolvió JSON inválido", Boolean(session.authenticatedUser));
-    emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
-
-    if (plan.action === "tool") {
-      const outcome = await invokeTool(plan.tool?.name, plan.tool?.input);
-      if (outcome?.status === "success") { await respondWithToolSuccess(outcome); return; }
-      continue;
-    }
-
-    const text = plan.final_response ?? "";
-    await emitStreamingText(emit, text);
-    session.history.push({ role: "assistant", content: text });
-    await saveSession(session);
-    return;
-  }
-
-  emit({ event: "error", data: { message: "El agente alcanzó el límite de iteraciones sin responder." } });
-
-  for (let i = 0; i < maxIters; i++) {
-    const contextual = session.authenticatedUser
-      ? `Usuario autenticado: ${session.authenticatedUser.id} - ${session.authenticatedUser.name}.`
-      : "El usuario no está autenticado. Pedí nombre y passcode y validá con verify_passcode.";
-
-    let content = "";
-    try {
-      content = await openrouterChat({
-        system: `${BASE_PROMPT}\n\n${contextual}`,
+    let plan: Plan | null = parsePlan(content);
+    if (!plan) {
+      const retry = await openrouterChat({
+        system: `${BASE_PROMPT}\n\nRESPONDE SOLO JSON plano (sin \`\`\`)`,
         messages: buildMessages(session.history),
         temperature: 0,
-        maxTokens: 1024,
+        maxTokens: 512,
       });
-    } catch (e) {
-      const plan = fallbackPlan(e instanceof Error ? e.message : "LLM error", Boolean(session.authenticatedUser));
-      emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
-      await emitStreamingText(emit, plan.final_response ?? "");
-      session.history.push({ role: "assistant", content: plan.final_response ?? "" });
-      await saveSession(session);
-      return;
+      plan = parsePlan(retry);
     }
+    plan =
+      plan ??
+      fallbackPlan(
+        "Modelo devolvió JSON inválido",
+        Boolean(session.authenticatedUser)
+      );
 
-    const plan = parsePlan(content) ?? fallbackPlan("Modelo devolvió JSON inválido", Boolean(session.authenticatedUser));
     emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
 
     if (plan.action === "tool") {
@@ -637,15 +842,24 @@ export async function runAgent(
         await respondWithToolSuccess(outcome);
         return;
       }
+      if (outcome) {
+        await respondWithToolError(outcome);
+        return;
+      }
       continue;
     }
 
-    const text = plan.final_response ?? "";
+    const text = plan.final_response; // siempre string por el schema
     await emitStreamingText(emit, text);
     session.history.push({ role: "assistant", content: text });
     await saveSession(session);
     return;
   }
 
-  emit({ event: "error", data: { message: "El agente alcanzó el límite de iteraciones sin responder." } });
+  emit({
+    event: "error",
+    data: {
+      message: "El agente alcanzó el límite de iteraciones sin responder.",
+    },
+  });
 }

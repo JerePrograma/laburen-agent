@@ -150,10 +150,14 @@ function formatSearchSummary(call: ClientToolCall) {
   const result = (call.result as any) ?? {};
   const matches = Array.isArray(result?.results) ? result.results : [];
   const count = matches.length;
-  const header = `${count} resultado${count === 1 ? "" : "s"}`;
+  const header =
+    count === 0
+      ? result?.message ?? "Sin resultados"
+      : `${count} resultado${count === 1 ? "" : "s"}`;
   const extras: string[] = [];
   if (result?.question) extras.push(`Consulta: "${String(result.question)}"`);
   if (matches[0]?.path) extras.push(`Ejemplo: ${matches[0].path}`);
+  if (result?.source === "static") extras.push("Fuente: compendio interno");
   return [header, extras.join(" • ")].filter(Boolean).join("\n");
 }
 

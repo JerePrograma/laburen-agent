@@ -10,7 +10,7 @@ import type { AgentMessage } from "@/lib/types";
 import { openrouterChat } from "@/lib/openrouter";
 
 type Plan = z.infer<typeof PlanSchema>;
-export type AgentJSONPlan = Plan;
+type RespondPlan = Extract<Plan, { action: "respond" }>;
 
 export type AgentEvent =
   | { event: "thought"; data: { id: string; text: string } }
@@ -106,14 +106,13 @@ function chunkResponse(text: string) {
 function parsePlan(raw: string): Plan | null {
   const tryParse = (s: string): Plan | null => {
     try {
-      return PlanSchema.parse(JSON.parse(s)) as Plan;
+      return PlanSchema.parse(JSON.parse(s));
     } catch {
       return null;
     }
   };
   let p = tryParse(raw);
   if (p) return p;
-
   const a = raw.indexOf("{"),
     b = raw.lastIndexOf("}");
   if (a >= 0 && b > a) {
@@ -121,14 +120,13 @@ function parsePlan(raw: string): Plan | null {
     if (p) return p;
   }
   try {
-    const repaired = jsonrepair(raw);
-    return tryParse(repaired);
+    return tryParse(jsonrepair(raw));
   } catch {
     return null;
   }
 }
 
-function fallbackPlan(reason: string, authenticated: boolean): Plan {
+function fallbackPlan(reason: string, authenticated: boolean): RespondPlan {
   return {
     thought: `Fallback: ${reason}`,
     action: "respond",

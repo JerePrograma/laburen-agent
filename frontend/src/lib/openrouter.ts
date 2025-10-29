@@ -1,24 +1,34 @@
-// frontend/src/lib/openrouter.ts
-type ORMessage = { role: "system" | "user" | "assistant"; content: string };
+// ──────────────────────────────────────────────────────────────────────────────
+// File: frontend/src/lib/openrouter.ts — Wrapper de chat para OpenRouter
+// ──────────────────────────────────────────────────────────────────────────────
 
+type ORMessage = { role: 'system' | 'user' | 'assistant'; content: string };
+
+/**
+ * openrouterChat(params): llama a OpenRouter /chat/completions y devuelve content string.
+ * - Exige OPENROUTER_API_KEY.
+ * - Usa modelo configurable por env, con temperatura y max_tokens.
+ * - Envía header HTTP-Referer y X-Title según guía de OpenRouter.
+ * - Timebox a 60s con AbortController. Valida status y contenido no vacío.
+ */
 export async function openrouterChat(params: {
   system: string;
-  messages: { role: "user" | "assistant"; content: string }[];
+  messages: { role: 'user' | 'assistant'; content: string }[];
   temperature?: number;
   maxTokens?: number;
 }): Promise<string> {
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) throw new Error("OPENROUTER_API_KEY ausente");
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY ausente');
 
-  const model = process.env.OPENROUTER_MODEL || "anthropic/claude-3.5-haiku";
+  const model = process.env.OPENROUTER_MODEL || 'anthropic/claude-3.5-haiku';
   const referer =
-    (process.env.NEXT_PUBLIC_BACKEND_URL && process.env.NEXT_PUBLIC_BACKEND_URL.replace(/\/$/, "")) ||
-    "https://app.jereprograma.com";
+    (process.env.NEXT_PUBLIC_BACKEND_URL && process.env.NEXT_PUBLIC_BACKEND_URL.replace(/\/$/, '')) ||
+    'https://app.jereprograma.com';
 
   const body = {
     model,
     messages: [
-      { role: "system", content: params.system },
+      { role: 'system', content: params.system },
       ...params.messages.map<ORMessage>((m) => ({ role: m.role, content: m.content })),
     ],
     temperature: params.temperature ?? 0.2,
@@ -30,14 +40,14 @@ export async function openrouterChat(params: {
 
   let res: Response;
   try {
-    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
+    res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
       headers: {
-        "Content-Type": "application/json",
+        'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
-        "HTTP-Referer": referer,
-        "X-Title": "Laburen AI Agent",
-        Accept: "application/json",
+        'HTTP-Referer': referer,
+        'X-Title': 'Laburen AI Agent',
+        Accept: 'application/json',
       },
       body: JSON.stringify(body),
       signal: ctrl.signal,
@@ -49,7 +59,7 @@ export async function openrouterChat(params: {
   clearTimeout(t);
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
+    const text = await res.text().catch(() => '');
     throw new Error(`openrouter ${res.status}: ${text || res.statusText}`);
   }
 
@@ -57,10 +67,10 @@ export async function openrouterChat(params: {
   const text: unknown =
     json?.choices?.[0]?.message?.content ??
     json?.choices?.[0]?.delta?.content ??
-    "";
+    '';
 
-  if (typeof text !== "string" || !text.trim()) {
-    throw new Error("openrouter: respuesta vacía");
+  if (typeof text !== 'string' || !text.trim()) {
+    throw new Error('openrouter: respuesta vacía');
   }
   return text.trim();
 }

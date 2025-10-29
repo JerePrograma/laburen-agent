@@ -1,7 +1,11 @@
-// src/lib/embeddings.ts
-type OllamaEmbed = { embeddings: number[][] };
-type OllamaLegacy = { embedding: number[] };
+// ──────────────────────────────────────────────────────────────────────────────
+// File: src/lib/embeddings.ts — Cliente de embeddings compatible con Ollama
+// ──────────────────────────────────────────────────────────────────────────────
 
+type OllamaEmbed = { embeddings: number[][] }; // formato nuevo: múltiples embeddings
+type OllamaLegacy = { embedding: number[] }; // formato legacy: un solo embedding
+
+/** Type guard: detecta respuesta { embeddings: number[][] } */
 function hasEmbeddings(j: unknown): j is OllamaEmbed {
   return (
     !!j &&
@@ -12,6 +16,7 @@ function hasEmbeddings(j: unknown): j is OllamaEmbed {
   );
 }
 
+/** Type guard: detecta respuesta { embedding: number[] } */
 function hasLegacy(j: unknown): j is OllamaLegacy {
   return (
     !!j &&
@@ -21,6 +26,11 @@ function hasLegacy(j: unknown): j is OllamaLegacy {
   );
 }
 
+/**
+ * fetchWithTimeout: wrapper de fetch con AbortController y timeout duro.
+ * - Evita cuelgues si el servidor de embeddings no responde.
+ * - Propaga un error con contexto de URL para logging.
+ */
 async function fetchWithTimeout(url: string, init: RequestInit, ms = 8_000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
@@ -35,6 +45,15 @@ async function fetchWithTimeout(url: string, init: RequestInit, ms = 8_000) {
   }
 }
 
+/**
+ * createEmbedding(text): obtiene un embedding para 'text' con tres intentos
+ * de compatibilidad:
+ *  1) POST /api/embed con input: string
+ *  2) POST /api/embed con input: [string]
+ *  3) POST /api/embeddings (legacy) con prompt: string
+ *
+ * Lanza error si todas las variantes fallan o responden sin vector.
+ */
 export async function createEmbedding(text: string): Promise<number[]> {
   const url = process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434";
   const model = process.env.EMBEDDING_MODEL || "nomic-embed-text";

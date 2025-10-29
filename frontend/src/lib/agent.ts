@@ -1,17 +1,46 @@
-// src/lib/agent.ts
+/**
+ * src/lib/agent.ts — Orquestador del "Laburen Agent"
+ *
+ * Objetivo: interpretar mensajes del usuario, ejecutar herramientas (tools)
+ * cuando aplique y producir respuestas en streaming. El agente optimiza
+ * latencia con rutas rápidas (fast-path) por regex para intents frecuentes
+ * y, sólo si no alcanza, delega a un LLM con un contrato JSON fuerte.
+ *
+ * Puntos clave del diseño:
+ * - Estado de conversación: historial + usuario autenticado en session-store.
+ * - Emisor de eventos (AgentEventEmitter) para UI: pensamiento, tokens,
+ *   llamadas a tools y resultados.
+ * - Planificación con JSON estricto (zod). Fallback robusto cuando el LLM
+ *   incumple el contrato.
+ * - Fast-path: intents comunes detectados con regex en español, evitando
+ *   round-trips al LLM.
+ * - LLM loop con reintento de parseo (jsonrepair) y "retry prompt".
+ *
+ * Seguridad/consistencia:
+ * - Validación de inputs por herramienta con zod (def.schema.parse).
+ * - Normalización de fechas para mensajes humanos.
+ * - Límite de iteraciones para evitar bucles.
+ */
+
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import { jsonrepair } from "jsonrepair";
 import { delay } from "@/lib/utils";
 import { getSession, saveSession } from "@/lib/session-store";
 import { tools } from "@/lib/tools";
+// ToolName: unión de las claves disponibles en el registro de tools.
 type ToolName = keyof typeof tools;
 import type { AgentMessage } from "@/lib/types";
 import { openrouterChat } from "@/lib/openrouter";
 
+// ----------------------------- Tipos de plan ------------------------------
+// Plan es la "orden" que el LLM devuelve: ejecutar tool o responder texto.
 type Plan = z.infer<typeof PlanSchema>;
 type RespondPlan = Extract<Plan, { action: "respond" }>;
 
+// --------------------------- Canalización de eventos -----------------------
+// Los eventos modelan el ciclo de vida para la UI: pensamiento, ejecución,
+// streaming de tokens, estado de auth y errores.
 export type AgentEvent =
   | { event: "thought"; data: { id: string; text: string } }
   | { event: "tool"; data: { id: string; name: string; input: unknown } }
@@ -37,15 +66,18 @@ export type AgentEvent =
 
 export type AgentEventEmitter = (event: AgentEvent) => void;
 
+// Lista de nombres de tools válidos para el discriminante del schema.
 const TOOL_NAMES = Object.keys(tools) as [string, ...string[]];
 
+// ------------------------- Contrato de salida del LLM ----------------------
+// PlanSchema fuerza un JSON con action = "tool" | "respond" y campos útiles.
 const PlanSchema = z.discriminatedUnion("action", [
   z.object({
     thought: z.string().default(""),
     action: z.literal("tool"),
     tool: z.object({
-      name: z.enum(TOOL_NAMES),
-      input: z.unknown().optional(),
+      name: z.enum(TOOL_NAMES), // restringe a tools registradas
+      input: z.unknown().optional(), // el parseo fino lo hace cada tool
     }),
     final_response: z.null().optional(),
     confidence: z.enum(["low", "medium", "high"]).optional(),
@@ -53,12 +85,13 @@ const PlanSchema = z.discriminatedUnion("action", [
   z.object({
     thought: z.string().default(""),
     action: z.literal("respond"),
-    final_response: z.string().min(1),
+    final_response: z.string().min(1), // respuesta final humana
     tool: z.null().optional(),
     confidence: z.enum(["low", "medium", "high"]).optional(),
   }),
 ]);
 
+// Prompt base con reglas de negocio y catálogo de tools.
 const BASE_PROMPT = `Eres Laburen Agent, un agente de producto que ayuda a equipos comerciales.
 Devuelve SOLO un JSON válido, sin texto extra, con: thought, action, tool, final_response.
 1) No respondas al usuario hasta autenticar con verify_passcode.
@@ -82,12 +115,13 @@ Tools (usa siempre JSON en tool.input):
 Ejemplo válido:
 {"thought":"Voy a verificar passcode","action":"tool","tool":{"name":"verify_passcode","input":{"name":"Carla","passcode":"123456"}},"final_response":null}`;
 
-// Mapeo de historial a mensajes para el LLM
+// ------------------------------ Utilidades LLM -----------------------------
+// Mapeo de historial conversacional a formato del proveedor OpenRouter.
 type ORMessage = { role: "user" | "assistant"; content: string };
 const buildMessages = (history: AgentMessage[]): ORMessage[] =>
   history.map((m) => ({ role: m.role, content: m.content }));
 
-// Streaming en chunks pequeños
+// Particiona texto en trozos pequeños para streaming; evita buffers grandes.
 function chunkResponse(text: string) {
   const words = text.split(/(\s+)/).filter(Boolean);
   const chunks: string[] = [];
@@ -95,6 +129,7 @@ function chunkResponse(text: string) {
   for (const w of words) {
     buf += w;
     if (buf.length >= 18) {
+      // umbral simple, configurable
       chunks.push(buf);
       buf = "";
     }
@@ -103,6 +138,9 @@ function chunkResponse(text: string) {
   return chunks.length ? chunks : [text];
 }
 
+// -------------------------- Parseo robusto de Plan -------------------------
+// Intenta parsear JSON exacto. Si falla, recorta al bloque {...} más amplio.
+// Luego aplica jsonrepair como último recurso.
 function parsePlan(raw: string): Plan | null {
   const tryParse = (s: string): Plan | null => {
     try {
@@ -126,6 +164,9 @@ function parsePlan(raw: string): Plan | null {
   }
 }
 
+// ---------------------------- Fallback determinista ------------------------
+// Construye un plan de respuesta segura cuando el LLM incumple el contrato
+// o no hay autenticación. No ejecuta tools.
 function fallbackPlan(reason: string, authenticated: boolean): RespondPlan {
   return {
     thought: `Fallback: ${reason}`,
@@ -138,25 +179,30 @@ function fallbackPlan(reason: string, authenticated: boolean): RespondPlan {
   };
 }
 
+// Emite un mensaje de asistente con tokens en streaming. Simula latencia.
 async function emitStreamingText(emit: AgentEventEmitter, text: string) {
   const id = randomUUID();
   emit({ event: "assistant_message", data: { id } });
   for (const chunk of chunkResponse(text)) {
     emit({ event: "token", data: { id, value: chunk } });
-    await delay(30);
+    await delay(30); // delay corto para UX
   }
   emit({ event: "assistant_done", data: { id } });
   return id;
 }
 
-// ---- Fast-path helpers
+// ------------------------------ FAST-PATHS ---------------------------------
+// Heurísticas con regex en español para reducir latencia y costo.
 
+// Normaliza extremos y espacios; deja caracteres relevantes para intent.
 const stripPunct = (s: string) =>
   s
     .replace(/^[^A-Za-zÁÉÍÓÚÑáéíóúñ]+|[^A-Za-zÁÉÍÓÚÑáéíóúñ0-9'() :.,-]+$/g, "")
     .replace(/\s+/g, " ")
     .trim();
 
+// -------------------------- Intent: verify_passcode ------------------------
+// Extrae nombre y passcode de frases del tipo "Soy Ana, mi passcode es 123".
 function extractPasscodeIntent(
   text: string
 ): { name: string; passcode: string } | null {
@@ -173,7 +219,8 @@ function extractPasscodeIntent(
   return { name, passcode };
 }
 
-// ----- Notas -----
+// ---------------------------- Intent: record_note --------------------------
+// Detecta órdenes de registrar/guardar/anotar una nota y extrae el texto.
 function extractRecordNote(msg: string) {
   // “Registrá/Guardá/Anotá … nota … <texto>” o “nota: …”
   const re1 =
@@ -185,7 +232,8 @@ function extractRecordNote(msg: string) {
   return cleaned.length >= 3 ? { text: cleaned } : null;
 }
 
-// ----- Leads -----
+// ---------------------------- Intent: create_lead --------------------------
+// Extrae nombre, email y fuente opcional de frases naturales.
 const emailRe = /<?([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})>?/i;
 function extractCreateLead(text: string) {
   // “Creá un lead para Ana ... con email/correo/mail x@x.com desde <fuente>”
@@ -216,9 +264,9 @@ function extractCreateLead(text: string) {
     : null;
 }
 
-// ----- Follow-ups: completar -----
+// ----------------------- Intent: complete_followup -------------------------
+// Ej.: “Completá el follow-up 3” o “Follow-up #5 completado”.
 function extractCompleteFollowUp(text: string) {
-  // Soporta “marcá/completá/cerrá el follow-up 3”
   const m =
     /(?:marc(a|á)|complet(a|á)|cerr(a|á)).*?follow[- ]?up\s*#?\s*(?<id>\d+)\b/i.exec(
       text
@@ -230,7 +278,8 @@ function extractCompleteFollowUp(text: string) {
   return Number.isFinite(id) ? { followUpId: id } : null;
 }
 
-// ----- Búsqueda en documentación -----
+// -------------------------- Intent: search_docs ----------------------------
+// Detecta preguntas o búsquedas explícitas sobre documentación.
 function extractSearchDocs(text: string) {
   const t = text.toLowerCase();
 
@@ -253,7 +302,8 @@ function extractSearchDocs(text: string) {
   return null;
 }
 
-// ----- Follow-ups: agendar con fechas en ES -----
+// ---------------------- Intent: schedule_followup (ES) ---------------------
+// Parser mínimo para fechas relativas y absolutas en español.
 function parseDueAtSpanish(
   msg: string
 ): { when: Date; matched: string } | null {
@@ -299,11 +349,12 @@ function parseDueAtSpanish(
   return null;
 }
 
+// Extrae título y dueAt a partir de la frase natural.
 function extractScheduleFollowUp(text: string) {
   const r = parseDueAtSpanish(text);
   if (!r) return null;
   const raw = stripPunct(text);
-  // quita “agendá/programá … follow-up”, conectores y la parte temporal
+  // Quita “agendá/programá … follow-up”, conectores y la parte temporal.
   let title = raw
     .replace(/agend(a|á|ar)\s+un?\s+follow[- ]?up/gi, "")
     .replace(/program(a|á|ar)\s+un?\s+follow[- ]?up/gi, "")
@@ -317,17 +368,19 @@ function extractScheduleFollowUp(text: string) {
   return { title, dueAt: r.when };
 }
 
-// ---- Agent (fast-path + fallback LLM)
-
+// ------------------------------ Núcleo del agente --------------------------
+// Orquesta fast-paths, herramientas y loop del LLM con fallback a prueba de fallos.
 export async function runAgent(
   conversationId: string,
   userMessage: string,
   emit: AgentEventEmitter
 ) {
+  // 0) Carga y persistencia inmediata del mensaje del usuario.
   const session = await getSession(conversationId);
   session.history.push({ role: "user", content: userMessage });
   await saveSession(session);
 
+  // ---- Helper local para invocar tools con validación y telemetría UI.
   type ToolCallOutcome = {
     name: ToolName;
     status: "success" | "error";
@@ -339,6 +392,7 @@ export async function runAgent(
     toolName: string | undefined,
     rawInput: unknown
   ): Promise<ToolCallOutcome | null> => {
+    // 1) Verificación de existencia de la tool
     if (!toolName || !(toolName in tools)) {
       emit({
         event: "error",
@@ -351,8 +405,11 @@ export async function runAgent(
       await saveSession(session);
       return null;
     }
+
     const typedName = toolName as ToolName;
     const def = tools[typedName];
+
+    // 2) Parseo/validación del input contra el schema de la tool
     let parsedInput: unknown;
     try {
       parsedInput = def.schema.parse(rawInput ?? {});
@@ -370,6 +427,7 @@ export async function runAgent(
       return null;
     }
 
+    // 3) Señaliza a la UI la invocación de la tool
     const callId = randomUUID();
     emit({
       event: "tool",
@@ -377,8 +435,11 @@ export async function runAgent(
     });
 
     try {
+      // 4) Ejecuta la tool y determina status semántico
       const result = await def.execute(parsedInput, { session });
       const status = (result as any)?.success === false ? "error" : "success";
+
+      // 5) Notifica resultado a la UI
       emit({
         event: "tool_result",
         data: {
@@ -394,6 +455,7 @@ export async function runAgent(
         },
       });
 
+      // 6) Persistencia mínima en historial para auditar flujos
       session.history.push({
         role: "assistant",
         content: `TOOL_CALL ${typedName}: ${JSON.stringify(parsedInput)}`,
@@ -403,6 +465,7 @@ export async function runAgent(
         content: `TOOL_RESULT ${typedName}: ${JSON.stringify(result)}`,
       });
 
+      // 7) Side-effect: si fue verify_passcode exitoso, fijar usuario autenticado
       if (typedName === "verify_passcode" && status === "success") {
         session.authenticatedUser = (result as any)?.user;
         emit({
@@ -414,6 +477,7 @@ export async function runAgent(
       await saveSession(session);
       return { name: typedName, status, parsedInput, result };
     } catch (err) {
+      // 8) Manejo de excepciones en la ejecución de la tool
       const msg = err instanceof Error ? err.message : "Error ejecutando tool";
       emit({
         event: "tool_result",
@@ -435,6 +499,8 @@ export async function runAgent(
     }
   };
 
+  // ---------------------- Helpers de respuesta de tools --------------------
+  // Normaliza formateo de mensajes humanos según la tool invocada.
   const formatDateTime = (value: unknown) => {
     if (!value) return null;
     const date =
@@ -623,6 +689,7 @@ export async function runAgent(
     }
   };
 
+  // Responder flujo feliz/errores y persistir en historial.
   const respondWithToolSuccess = async (outcome: ToolCallOutcome) => {
     const message = buildToolSuccessMessage(outcome);
     await emitStreamingText(emit, message);
@@ -639,7 +706,8 @@ export async function runAgent(
     await saveSession(session);
   };
 
-  // 1) Auth fast-path
+  // ----------------------------- Estrategia de flujo -----------------------
+  // 1) Auth fast-path: si no hay usuario autenticado, intenta extraer passcode.
   if (!session.authenticatedUser) {
     const creds = extractPasscodeIntent(userMessage);
     if (creds) {
@@ -647,16 +715,17 @@ export async function runAgent(
       if (outcome) {
         if (outcome.status === "success") {
           await respondWithToolSuccess(outcome);
-          return;
+          return; // auth resuelta
         }
         await respondWithToolError(outcome);
-        return;
+        return; // informar error de auth
       }
     }
   }
 
-  // 2) Acciones y listados (si autenticado)
+  // 2) Acciones y listados si ya está autenticado
   if (session.authenticatedUser) {
+    // Completar follow-up
     const done = extractCompleteFollowUp(userMessage);
     if (done) {
       const outcome = await invokeTool("complete_followup", done);
@@ -670,6 +739,7 @@ export async function runAgent(
       }
     }
 
+    // Agendar follow-up con fecha
     const sched = extractScheduleFollowUp(userMessage);
     if (sched) {
       const outcome = await invokeTool("schedule_followup", sched);
@@ -683,6 +753,7 @@ export async function runAgent(
       }
     }
 
+    // Crear lead rápido
     const lead = extractCreateLead(userMessage);
     if (lead) {
       const outcome = await invokeTool("create_lead", lead);
@@ -696,6 +767,7 @@ export async function runAgent(
       }
     }
 
+    // Registrar nota
     const note = extractRecordNote(userMessage);
     if (note) {
       const outcome = await invokeTool("record_note", note);
@@ -709,6 +781,7 @@ export async function runAgent(
       }
     }
 
+    // Listados con extracción de límite numérico simple (1–12)
     const normalized = userMessage.toLowerCase();
     const numberMatch = userMessage.match(/\b(\d{1,2})\b/);
     const limit = numberMatch ? Number(numberMatch[1]) : undefined;
@@ -767,7 +840,7 @@ export async function runAgent(
     }
   }
 
-  // 3) Búsqueda en docs (al final)
+  // 3) Búsqueda en docs como último fast-path
   const q = extractSearchDocs(userMessage);
   if (q) {
     const outcome = await invokeTool("search_docs", q);
@@ -781,12 +854,14 @@ export async function runAgent(
     }
   }
 
-  // 4) LLM loop único con retry JSON
-  // antes del loop
+  // 4) LLM loop con límite y reintentos de JSON
+  // Define un máximo acotado de iteraciones y hace un retry si el primer
+  // contenido no parsea contra PlanSchema.
   const maxIters = Math.min(
     10,
     Math.max(1, Number(process.env.MAX_TOOL_ITERATIONS ?? "4"))
   );
+
   for (let i = 0; i < maxIters; i++) {
     const contextual = session.authenticatedUser
       ? `Usuario autenticado: ${session.authenticatedUser.id} - ${session.authenticatedUser.name}.`
@@ -801,6 +876,7 @@ export async function runAgent(
         maxTokens: 1024,
       });
     } catch (e) {
+      // Error de transporte o proveedor. Se devuelve fallback legible.
       const plan = fallbackPlan(
         e instanceof Error ? e.message : "LLM error",
         Boolean(session.authenticatedUser)
@@ -815,6 +891,7 @@ export async function runAgent(
       return;
     }
 
+    // Intento de parseo principal + retry con prompt más estricto
     let plan: Plan | null = parsePlan(content);
     if (!plan) {
       const retry = await openrouterChat({
@@ -825,6 +902,8 @@ export async function runAgent(
       });
       plan = parsePlan(retry);
     }
+
+    // Si sigue fallando, construir fallback determinista
     plan =
       plan ??
       fallbackPlan(
@@ -832,8 +911,10 @@ export async function runAgent(
         Boolean(session.authenticatedUser)
       );
 
+    // Telemetría de pensamiento para UI
     emit({ event: "thought", data: { id: randomUUID(), text: plan.thought } });
 
+    // Branch: ejecutar tool vs responder texto
     if (plan.action === "tool") {
       const outcome = await invokeTool(plan.tool?.name, plan.tool?.input);
       if (outcome?.status === "success") {
@@ -844,16 +925,18 @@ export async function runAgent(
         await respondWithToolError(outcome);
         return;
       }
-      continue;
+      continue; // si outcome fue null por error de parse, permitir otra iteración
     }
 
-    const text = plan.final_response; // siempre string por el schema
+    // action === "respond"
+    const text = plan.final_response; // por schema, string no vacío
     await emitStreamingText(emit, text);
     session.history.push({ role: "assistant", content: text });
     await saveSession(session);
     return;
   }
 
+  // Límite de iteraciones alcanzado; protegerse contra loops.
   emit({
     event: "error",
     data: {

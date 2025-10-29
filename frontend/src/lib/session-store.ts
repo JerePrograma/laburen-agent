@@ -1,6 +1,9 @@
-// src/lib/session-store.ts
-import { query, queryOne } from "@/lib/db";
-import type { AgentMessage } from "@/lib/types";
+// ──────────────────────────────────────────────────────────────────────────────
+// File: src/lib/session-store.ts — Sesiones del agente en Postgres
+// ──────────────────────────────────────────────────────────────────────────────
+
+import { query, queryOne } from '@/lib/db';
+import type { AgentMessage } from '@/lib/types';
 
 export interface AgentSession {
   id: string;
@@ -9,10 +12,19 @@ export interface AgentSession {
   authenticatedUser?: { id: number; name: string } | null;
 }
 
+/**
+ * clampHistory: acota el historial para evitar crecer indefinidamente.
+ * - Mantiene los últimos N mensajes (default 120).
+ */
 function clampHistory(history: AgentMessage[], max = 120) {
   return history.length > max ? history.slice(history.length - max) : history;
 }
 
+/**
+ * serialize: prepara la sesión para persistencia.
+ * - Convierte createdAt a ISO string.
+ * - Asegura authenticated_user null si no hay usuario.
+ */
 function serialize(session: AgentSession) {
   return {
     id: session.id,
@@ -22,6 +34,11 @@ function serialize(session: AgentSession) {
   };
 }
 
+/**
+ * getSession(id): obtiene o crea una sesión por ID en una sola operación.
+ * - Usa un CTE con INSERT ... ON CONFLICT DO NOTHING y luego selecciona.
+ * - Devuelve history como array; si viene en string JSON, lo parsea.
+ */
 export async function getSession(id: string): Promise<AgentSession> {
   const row = await queryOne<{
     id: string;
@@ -49,7 +66,7 @@ export async function getSession(id: string): Promise<AgentSession> {
 
   const hist =
     Array.isArray(row?.history) ? row!.history
-    : typeof row?.history === "string" ? JSON.parse(row!.history as unknown as string)
+    : typeof row?.history === 'string' ? JSON.parse(row!.history as unknown as string)
     : [];
 
   return {
@@ -60,6 +77,11 @@ export async function getSession(id: string): Promise<AgentSession> {
   };
 }
 
+/**
+ * saveSession(session): persiste cambios en authenticated_user e history.
+ * - Actualiza updated_at = now() para auditoría.
+ * - Requiere que la tabla session tenga columna updated_at (timestamp/timestamptz).
+ */
 export async function saveSession(session: AgentSession): Promise<void> {
   const s = serialize(session);
   await query(

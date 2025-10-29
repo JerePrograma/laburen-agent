@@ -1,22 +1,28 @@
+// ──────────────────────────────────────────────────────────────────────────────
+// File: frontend/src/components/AgentStatusPanel.tsx — Panel de estado del agente
+// ──────────────────────────────────────────────────────────────────────────────
+
 "use client";
 
 import { useMemo } from "react";
 import type { ConversationStatus } from "@/hooks/useAgentConversation";
 import type { AgentStateUpdate, ClientToolCall } from "@/lib/types";
 
+// Props del panel de estado. Sólo UI: no toca red ni estado global fuera de callbacks.
 interface AgentStatusPanelProps {
-  conversationId: string | null;
-  status: ConversationStatus;
-  agentState: AgentStateUpdate;
-  isStreaming: boolean;
-  lastEventAt: number | null;
-  lastError: string | null;
-  lastToolCall: ClientToolCall | null;
-  suggestions: string[];
-  onSuggestion: (prompt: string) => void;
-  onReset: () => void;
+  conversationId: string | null; // ID de la conversación actual (para correlación/depuración)
+  status: ConversationStatus; // Estado de la conversación (idle/connecting/streaming/error)
+  agentState: AgentStateUpdate; // Estado del agente (p.ej., usuario autenticado)
+  isStreaming: boolean; // Flag de streaming en curso (para etiquetas de UI)
+  lastEventAt: number | null; // Timestamp del último evento recibido (para "hace X")
+  lastError: string | null; // Último error mostrado (si existe)
+  lastToolCall: ClientToolCall | null; // Última tool invocada (preview)
+  suggestions: string[]; // Sugerencias rápidas (según estado auth)
+  onSuggestion: (prompt: string) => void; // Callback al click de sugerencia
+  onReset: () => void; // Reinicio de sesión/estado
 }
 
+// Dataset estático para renderizar guía de palabras clave (ayuda al usuario a "descubrir" intents)
 const KEYWORD_GUIDE: Array<{
   category: string;
   description: string;
@@ -27,7 +33,8 @@ const KEYWORD_GUIDE: Array<{
     category: "Leads",
     description: "Para dar de alta contactos y seguir oportunidades.",
     keywords: ["creá", "crear", "registrá", "cargá"],
-    example: "Creá un lead para Ana Torres con email ana@ejemplo.com desde LinkedIn.",
+    example:
+      "Creá un lead para Ana Torres con email ana@ejemplo.com desde LinkedIn.",
   },
   {
     category: "Notas",
@@ -43,12 +50,14 @@ const KEYWORD_GUIDE: Array<{
   },
   {
     category: "Documentación",
-    description: "Para buscar guías y mejores prácticas en la base de conocimiento.",
+    description:
+      "Para buscar guías y mejores prácticas en la base de conocimiento.",
     keywords: ["buscá", "consultá", "documentación"],
     example: "Buscá buenas prácticas comerciales en la documentación.",
   },
 ];
 
+// Subcomponente puramente presentacional: guía compacta de intents
 function KeywordGuide() {
   return (
     <div className="keyword-guide">
@@ -75,6 +84,7 @@ function KeywordGuide() {
   );
 }
 
+// Formateadores utilitarios (pura UI). Separados para test unitario fácil.
 function formatStatus(status: ConversationStatus, isStreaming: boolean) {
   if (status === "streaming" && isStreaming) return "Respondiendo";
   if (status === "connecting") return "Conectando";
@@ -94,9 +104,10 @@ function formatLastEvent(lastEventAt: number | null) {
   return `Hace ${hours} h`;
 }
 
+// --- Resúmenes por tool: transforman payloads a textos sintéticos legibles ---
 function formatLeadSummary(call: ClientToolCall) {
   const result = (call.result as any) ?? {};
-  const lead = result?.lead ?? result;
+  const lead = result?.lead ?? result; // tolera ambas formas
   const input = (call.input as any) ?? {};
   const name = lead?.name ?? input?.name;
   const email = lead?.email ?? input?.email;
@@ -183,34 +194,46 @@ function formatToolSummary(call: ClientToolCall) {
       const notes = Array.isArray(result.notes) ? result.notes : [];
       if (!notes.length) return result.message ?? "Sin notas";
       const first = notes[0];
-      const created = first?.createdAt ? new Date(first.createdAt).toLocaleString() : null;
+      const created = first?.createdAt
+        ? new Date(first.createdAt).toLocaleString()
+        : null;
       const snippet =
         typeof first?.text === "string" && first.text.trim().length
           ? first.text.trim().length > 90
             ? `${first.text.trim().slice(0, 87)}…`
             : first.text.trim()
           : "(sin detalle)";
-      return [`${notes.length} nota${notes.length === 1 ? "" : "s"}`, `Última: ${snippet}`, created]
+      return [
+        `${notes.length} nota${notes.length === 1 ? "" : "s"}`,
+        `Última: ${snippet}`,
+        created,
+      ]
         .filter(Boolean)
         .join("\n");
     }
     case "delete_note": {
       const deleted = (call.result as any)?.deleted;
-      const when = deleted?.createdAt ? new Date(deleted.createdAt).toLocaleString() : null;
+      const when = deleted?.createdAt
+        ? new Date(deleted.createdAt).toLocaleString()
+        : null;
       const snippet =
         typeof deleted?.text === "string" && deleted.text.trim().length
           ? deleted.text.trim().length > 90
             ? `${deleted.text.trim().slice(0, 87)}…`
             : deleted.text.trim()
           : null;
-      return [`Nota ${deleted?.id ?? ""} eliminada`, snippet, when].filter(Boolean).join("\n");
+      return [`Nota ${deleted?.id ?? ""} eliminada`, snippet, when]
+        .filter(Boolean)
+        .join("\n");
     }
     case "list_leads": {
       const result = (call.result as any) ?? {};
       const leads = Array.isArray(result.leads) ? result.leads : [];
       if (!leads.length) return result.message ?? "Sin leads";
       const first = leads[0];
-      const created = first?.createdAt ? new Date(first.createdAt).toLocaleString() : null;
+      const created = first?.createdAt
+        ? new Date(first.createdAt).toLocaleString()
+        : null;
       const email = first?.email ? `<${first.email}>` : null;
       return [
         `${leads.length} lead${leads.length === 1 ? "" : "s"}`,
@@ -222,8 +245,14 @@ function formatToolSummary(call: ClientToolCall) {
     }
     case "schedule_followup": {
       const followUp = (call.result as any)?.followUp ?? {};
-      const due = followUp?.dueAt ? new Date(followUp.dueAt).toLocaleString() : "sin fecha";
-      return [`Follow-up ${followUp.id ?? ""}`, followUp.title ?? "", `Vence: ${due}`]
+      const due = followUp?.dueAt
+        ? new Date(followUp.dueAt).toLocaleString()
+        : "sin fecha";
+      return [
+        `Follow-up ${followUp.id ?? ""}`,
+        followUp.title ?? "",
+        `Vence: ${due}`,
+      ]
         .filter(Boolean)
         .join("\n");
     }
@@ -232,7 +261,9 @@ function formatToolSummary(call: ClientToolCall) {
       const followUps = Array.isArray(result.followUps) ? result.followUps : [];
       if (!followUps.length) return result.message ?? "Sin follow-ups";
       const first = followUps[0];
-      const due = first?.dueAt ? new Date(first.dueAt).toLocaleString() : "sin fecha";
+      const due = first?.dueAt
+        ? new Date(first.dueAt).toLocaleString()
+        : "sin fecha";
       return [
         `${followUps.length} follow-up${followUps.length === 1 ? "" : "s"}`,
         `${first?.title ?? "Sin título"} (${first?.status ?? ""})`,
@@ -256,7 +287,7 @@ function formatToolSummary(call: ClientToolCall) {
     case "search_docs":
       return formatSearchSummary(call);
     default:
-      return call.name;
+      return call.name; // fallback: nombre de tool sin transformación
   }
 }
 
@@ -288,6 +319,7 @@ function formatToolTitle(call: ClientToolCall) {
   }
 }
 
+// Preview compacto de la última tool invocada, con badge de estado y resumen
 function ToolCallPreview({ call }: { call: ClientToolCall }) {
   const badgeClass = `badge ${call.status}`;
   const summary = useMemo(() => formatToolSummary(call), [call]);
@@ -297,7 +329,9 @@ function ToolCallPreview({ call }: { call: ClientToolCall }) {
     <div className="status-block">
       <div className="status-block-header">
         <span className="badge tool">Tool</span>
-        <span className={badgeClass}>{call.status === "success" ? "OK" : "Error"}</span>
+        <span className={badgeClass}>
+          {call.status === "success" ? "OK" : "Error"}
+        </span>
       </div>
       <div className="status-block-title">{title}</div>
       <p className="status-block-body">{summary}</p>
@@ -306,6 +340,7 @@ function ToolCallPreview({ call }: { call: ClientToolCall }) {
   );
 }
 
+// Componente principal: compone encabezado de sesión, tarjetas de estado, preview y sugerencias
 export function AgentStatusPanel({
   conversationId,
   status,
@@ -353,9 +388,7 @@ export function AgentStatusPanel({
 
       {lastToolCall ? <ToolCallPreview call={lastToolCall} /> : null}
 
-      {lastError ? (
-        <div className="status-error">⚠️ {lastError}</div>
-      ) : null}
+      {lastError ? <div className="status-error">⚠️ {lastError}</div> : null}
 
       <div className="quick-actions">
         <span className="small-label">Ideas para probar</span>

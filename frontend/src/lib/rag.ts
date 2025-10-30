@@ -6,7 +6,7 @@ import { createEmbedding } from "@/lib/embeddings";
 import { query } from "@/lib/db";
 import { toPgVector } from "@/lib/utils";
 
-type SearchRow = {
+export type DocSearchResult = {
   id: number;
   path: string;
   content: string;
@@ -27,7 +27,7 @@ export async function searchDocuments(
   question: string,
   limit = 3,
   minSimilarity = 0.25
-) {
+): Promise<DocSearchResult[]> {
   const embedding = await createEmbedding(question);
   const vector = toPgVector(embedding);
 
@@ -41,7 +41,7 @@ export async function searchDocuments(
     ORDER BY dc.embedding <=> $1::vector
     LIMIT $2
   `;
-  const res = await query<SearchRow>(sql, [vector, limit]);
+  const res = await query<DocSearchResult>(sql, [vector, limit]);
   return res.rows
     .map((r) => ({ ...r, similarity: Number(r.similarity.toFixed(3)) }))
     .filter((r) => r.similarity >= minSimilarity);

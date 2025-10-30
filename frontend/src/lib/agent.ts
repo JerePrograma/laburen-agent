@@ -289,16 +289,21 @@ function extractSearchDocs(text: string) {
   );
 
   const hasDocsWords =
-    /\b(documentación|manual|guía|onboarding|prácticas)\b/.test(t);
+    /\b(documentación|documentos|manual|guía|onboarding|prácticas)\b/.test(t);
   const explicitSearch = /^\s*busc(a|á|ar)\b/.test(t);
+  const hasKnowledgeKeywords =
+    /\b(embedding|embeddings|vector|rag|modelo|stack|arquitectura|pipeline|contexto)\b/.test(
+      t
+    );
 
   if (
     (hasQuestionPunct || hasInterrogatives) &&
-    (hasDocsWords || explicitSearch)
+    (hasDocsWords || explicitSearch || hasKnowledgeKeywords)
   ) {
     return { question: stripPunct(text) };
   }
-  if (explicitSearch && hasDocsWords) return { question: stripPunct(text) };
+  if (explicitSearch && (hasDocsWords || hasKnowledgeKeywords))
+    return { question: stripPunct(text) };
   return null;
 }
 
@@ -571,9 +576,21 @@ export async function runAgent(
           : [];
         const count = matches.length;
         const extras: string[] = [];
-        if (matches[0]?.path) extras.push(`Ejemplo: ${matches[0].path}`);
         if (payload.question)
           extras.push(`Consulta: "${String(payload.question)}"`);
+        if (matches[0]?.path) extras.push(`Ejemplo: ${matches[0].path}`);
+        if (payload.source === "static")
+          extras.push("Fuente: compendio interno");
+        if (count === 0) {
+          const baseMessage =
+            payload.message ??
+            "No encontré fragmentos relevantes en la documentación.";
+          const hint =
+            payload.source === "none"
+              ? " Si tenés más contexto, compartilo y vuelvo a buscar."
+              : "";
+          return `${baseMessage}${hint}`;
+        }
         const extraText = extras.length ? ` ${extras.join(" • ")}` : "";
         return `Encontré ${count} fragmento${
           count === 1 ? "" : "s"

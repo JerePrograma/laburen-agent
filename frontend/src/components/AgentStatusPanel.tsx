@@ -61,7 +61,6 @@ const KEYWORD_GUIDE: Array<{
 function KeywordGuide() {
   return (
     <div className="keyword-guide">
-      <span className="small-label">Guía de palabras clave</span>
       <div className="keyword-guide-grid">
         {KEYWORD_GUIDE.map((entry) => (
           <article key={entry.category} className="keyword-card">
@@ -162,10 +161,14 @@ function formatSearchSummary(call: ClientToolCall) {
   const result = (call.result as any) ?? {};
   const matches = Array.isArray(result?.results) ? result.results : [];
   const count = matches.length;
-  const header = `${count} resultado${count === 1 ? "" : "s"}`;
+  const header =
+    count === 0
+      ? result?.message ?? "Sin resultados"
+      : `${count} resultado${count === 1 ? "" : "s"}`;
   const extras: string[] = [];
   if (result?.question) extras.push(`Consulta: "${String(result.question)}"`);
   if (matches[0]?.path) extras.push(`Ejemplo: ${matches[0].path}`);
+  if (result?.source === "static") extras.push("Fuente: compendio interno");
   return [header, extras.join(" • ")].filter(Boolean).join("\n");
 }
 
@@ -390,8 +393,11 @@ export function AgentStatusPanel({
 
       {lastError ? <div className="status-error">⚠️ {lastError}</div> : null}
 
-      <div className="quick-actions">
-        <span className="small-label">Ideas para probar</span>
+      <details className="panel-section" open>
+        <summary>
+          <span>Ideas para probar</span>
+          <span className="badge neutral">{suggestions.length}</span>
+        </summary>
         <div className="quick-actions-grid">
           {suggestions.map((suggestion) => (
             <button
@@ -404,9 +410,14 @@ export function AgentStatusPanel({
             </button>
           ))}
         </div>
-      </div>
+      </details>
 
-      <KeywordGuide />
+      <details className="panel-section">
+        <summary>
+          <span>Guía de palabras clave</span>
+        </summary>
+        <KeywordGuide />
+      </details>
     </section>
   );
 }

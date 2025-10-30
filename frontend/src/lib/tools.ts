@@ -438,7 +438,33 @@ export const tools: ToolRegistry = {
     async execute(input) {
       // Delegación al motor RAG (pgvector). El filtrado/ordenamiento se resuelve allí.
       const results = await searchDocuments(input.question);
-      return { success: true, question: input.question, results };
+      if (results.length > 0) {
+        return {
+          success: true,
+          question: input.question,
+          results,
+          source: "vector" as const,
+        };
+      }
+
+      const fallback = fallbackDocSearch(input.question);
+      if (fallback.length > 0) {
+        return {
+          success: true,
+          question: input.question,
+          results: fallback,
+          source: "static" as const,
+        };
+      }
+
+      return {
+        success: true,
+        question: input.question,
+        results: [],
+        source: "none" as const,
+        message:
+          "No encontré material relacionado en la documentación cargada.",
+      };
     },
   },
 };
